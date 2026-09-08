@@ -1,0 +1,31 @@
+cabal-version:   3.0
+name:            clientsession
+version:         0.9.3.0
+synopsis:        Compile-only stand-in for clientsession on wasm32-wasi
+description:
+  This is the one genuinely fictional shim in this project, and the reason the
+  PoC's Yesod applications must not use client sessions.
+  .
+  The real package encrypts session cookies with AES-CTR and authenticates them
+  with Skein-MAC-512-256, via `crypton` -> `memory` -> `basement`, none of which
+  builds for wasm32-wasi. `yesod-core` depends on it unconditionally, even for an
+  application that never opens a session.
+  .
+  Every cryptographic operation here raises an error describing the situation.
+  An application that sets @makeSessionBackend _ = pure Nothing@ never reaches
+  them; one that uses sessions will fail at runtime rather than at compile time,
+  which is the cost of this approach.
+
+license:         BSD-3-Clause
+author:          workers-wai PoC
+build-type:      Simple
+
+library
+  hs-source-dirs:   src
+  exposed-modules:  Web.ClientSession
+  build-depends:
+    , base        >=4.17 && <5
+    , bytestring
+
+  default-language: Haskell2010
+  ghc-options:      -Wall

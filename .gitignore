@@ -1,0 +1,7 @@
+dist-newstyle/
+worker/generated/
+worker/node_modules/
+worker/.wrangler/
+node_modules/
+result
+.direnv/

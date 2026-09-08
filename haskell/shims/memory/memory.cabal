@@ -1,0 +1,27 @@
+cabal-version:   3.0
+name:            memory
+version:         0.18.0
+synopsis:        The slice of `memory` that yesod-core uses, without basement
+description:
+  The real `memory` package depends on `basement`, which does not build for
+  wasm32-wasi: its @cbits\/foundation_system.h@ dispatches on @_WIN32@ /
+  @__APPLE__@ / @__linux__@ / @__unix__@ and errors out on anything else, and
+  wasi-sdk's clang defines @__wasi__@, which it has never heard of.
+  .
+  `yesod-core` uses exactly one function from `memory`:
+  'Data.ByteArray.constEq', for constant-time CSRF token comparison. That is
+  reimplemented here faithfully, so the security property is preserved.
+
+license:         BSD-3-Clause
+author:          workers-wai PoC
+build-type:      Simple
+
+library
+  hs-source-dirs:   src
+  exposed-modules:  Data.ByteArray
+  build-depends:
+    , base        >=4.17 && <5
+    , bytestring
+
+  default-language: Haskell2010
+  ghc-options:      -Wall

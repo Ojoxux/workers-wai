@@ -1,0 +1,26 @@
+-- haskell/shims/* shadow Hackage packages that do not build for wasm32-wasi but
+-- that yesod-core's dependency tree requires. Each shim's .cabal file explains
+-- what the real package does, why it fails here, and how faithful the
+-- replacement is. Summary:
+--
+--   network        no netdb.h in wasi-libc. Real address types, socket
+--                  operations that fail loudly. Also unblocks recv,
+--                  streaming-commons, http-semantics, http2, warp, wai-extra.
+--   entropy        real: backed by the host's crypto.getRandomValues.
+--   memory         real: constEq reimplemented as constant-time comparison.
+--   clientsession  fictional: no AES/Skein. Sessions must be disabled.
+packages:
+  haskell/wai-handler-cloudflare
+  haskell/demo-wai
+  haskell/demo-yesod
+  haskell/shims/network
+  haskell/shims/entropy
+  haskell/shims/memory
+  haskell/shims/clientsession
+
+-- warp's `x509` flag defaults on and pulls in crypton-x509 -> crypton -> ram,
+-- which needs mmap and TIOCGWINSZ -- neither of which WASI has. The flag only
+-- enables reading TLS client certificates, and Cloudflare terminates TLS
+-- upstream, so nothing is lost.
+package warp
+  flags: -x509

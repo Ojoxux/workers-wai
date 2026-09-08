@@ -1,0 +1,30 @@
+cabal-version:   3.0
+name:            wai-handler-cloudflare
+version:         0.1.0.0
+synopsis:        Run a WAI Application on the Cloudflare Workers runtime
+description:
+  A WAI handler that bridges the Cloudflare Workers @fetch@ event to a WAI
+  'Network.Wai.Application', in place of a socket-based server such as Warp.
+  Proof of concept: see the README for the supported subset of WAI.
+
+license:         BSD-3-Clause
+author:          workers-wai PoC
+build-type:      Simple
+
+library
+  hs-source-dirs:   src
+  exposed-modules:  Network.Wai.Handler.Cloudflare
+  build-depends:
+    , base             >=4.17 && <5
+    , bytestring
+    , case-insensitive
+    -- GHC.Wasm.Prim (JSVal, JSString, the JSFFI machinery). This is what ties
+    -- the package to GHC's wasm backend; it will not build natively.
+    , ghc-experimental
+    , http-types
+    , network
+    , vault
+    , wai
+
+  default-language: Haskell2010
+  ghc-options:      -Wall
