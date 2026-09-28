@@ -17,6 +17,8 @@ done
 
 # --test-force-exit: Yesod starts a background Haskell thread (auto-update /
 # date cache) whose threadDelay the wasm RTS implements with setTimeout, which
-# would otherwise keep the Node process alive forever. Harmless on Workers,
-# where timers die with the request.
-node --test --test-force-exit "test/*.test.mjs"
+# would otherwise keep the Node process alive forever. Whether workerd treats
+# these timers the same way once a request ends is checked separately against
+# wrangler dev, not here.
+# --test-timeout: a test that never settles fails instead of hanging the run.
+node --test --test-force-exit --test-timeout=30000 "test/*.test.mjs"

@@ -108,10 +108,13 @@ toWaiRequest freq ctx = do
       }
 
 -- | Scheme check, path and query (with its leading @?@, or empty) of the
--- absolute, already percent-encoded URL the runtime hands us.
+-- absolute, already percent-encoded URL the runtime hands us. The fragment,
+-- if any, is dropped first: @request.url@ can carry one for service-binding,
+-- self-fetch and test requests, and it is never sent to a server.
 splitUrl :: Text -> (Bool, B.ByteString, B.ByteString)
 splitUrl u =
-  let (scheme, rest) = T.breakOn "://" u
+  let withoutFragment = T.takeWhile (/= '#') u
+      (scheme, rest) = T.breakOn "://" withoutFragment
       afterAuthority = T.dropWhile (/= '/') (T.drop 3 rest)
       (p, q) = T.breakOn "?" afterAuthority
       path = if T.null p then "/" else p

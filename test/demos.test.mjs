@@ -27,6 +27,12 @@ test("demo-wai: path, query and headers", async () => {
   assert.match(text, /^ {2}x-demo: yes$/m);
 });
 
+test("demo-wai: a URL fragment is not part of the path or query", async () => {
+  const { text } = await send(wai, "/a/b?x=1#frag");
+  assert.match(text, /^rawPathInfo: \/a\/b$/m);
+  assert.match(text, /^rawQueryString: \?x=1$/m);
+});
+
 test("demo-wai: POST body", async () => {
   const { text } = await send(wai, "/echo", {
     method: "POST",
