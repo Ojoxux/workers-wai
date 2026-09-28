@@ -45,3 +45,13 @@ test("a JS exception keeps its name", async () => {
   assert.equal(res.status, 500);
   assert.match(await res.text(), /fetch not a url failed: TypeError: /);
 });
+
+test("a replaced body does not keep the inbound content-length", async () => {
+  const res = await send("/fetch/rewrite", {
+    method: "POST",
+    headers: { "content-length": "13" },
+    body: "original body",
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { method: "POST", xtest: null, body: "rewritten" });
+});

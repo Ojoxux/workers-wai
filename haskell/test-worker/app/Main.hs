@@ -56,6 +56,9 @@ route env req _ctx =
     ["fetch", "proxy"] -> do
       up <- Env.var env "UPSTREAM"
       F.fetch req {F.url = up <> "/echo"}
+    ["fetch", "rewrite"] -> do
+      up <- Env.var env "UPSTREAM"
+      F.fetch req {F.url = up <> "/echo", F.body = F.bodyText "rewritten"}
     ["fetch", "unreachable"] -> F.fetch F.request {F.url = "http://127.0.0.1:1/"}
     ["fetch", "badurl"] -> F.fetch F.request {F.url = "not a url"}
     _ -> pure (F.response 404 [] (F.bodyText "not found"))

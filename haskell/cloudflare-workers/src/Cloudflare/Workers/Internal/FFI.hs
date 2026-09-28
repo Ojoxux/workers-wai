@@ -175,7 +175,9 @@ consoleError = js_consoleError . textToJS
 foreign import javascript unsafe "(() => { try { return String($1?.name ?? 'Error'); } catch { return 'Error'; } })()"
   js_errorName :: JSVal -> IO JSString
 
-foreign import javascript unsafe "(() => { try { return String($1?.message ?? $1); } catch { return '<unprintable>'; } })()"
+-- | Appends @err.cause@ when present: undici reports every network failure
+-- as "fetch failed" with the reason only in the cause.
+foreign import javascript unsafe "(() => { try { const m = String($1?.message ?? $1); const c = $1?.cause; return c === undefined ? m : m + ' (cause: ' + String(c?.message ?? c) + ')'; } catch { return '<unprintable>'; } })()"
   js_errorMessage :: JSVal -> IO JSString
 
 foreign import javascript unsafe "(() => { try { return String($1?.stack ?? ''); } catch { return ''; } })()"

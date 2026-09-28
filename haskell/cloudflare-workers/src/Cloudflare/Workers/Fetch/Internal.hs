@@ -41,7 +41,8 @@ import qualified Data.Text                       as T
 import qualified Data.Text.Encoding              as TE
 import qualified Data.Text.Encoding.Error        as TEE
 import           Network.HTTP.Types              (Method, RequestHeaders,
-                                                  ResponseHeaders)
+                                                  ResponseHeaders,
+                                                  hContentLength)
 
 import           Cloudflare.Workers.Internal.FFI
 
@@ -164,6 +165,10 @@ responseBody = rBody
 
 -- | The request failed before any response arrived: DNS, connection, TLS,
 -- an invalid URL. HTTP error statuses are ordinary 'Response's.
+--
+-- Checks made before anything is sent are not wrapped: a NUL in a header
+-- throws a 'JSError' named @TypeError@, and an already-used body throws
+-- 'BodyAlreadyUsed'.
 data FetchException = FetchException
   { fetchUrl   :: Text
   , fetchCause :: JSError
@@ -174,15 +179,25 @@ instance Exception FetchException where
   displayException e =
     "fetch " <> T.unpack (fetchUrl e) <> " failed: " <> displayException (fetchCause e)
 
+-- | Send a request. Throws 'FetchException' if no response arrives.
+--
+-- When the body is built in Haskell ('bodyBytes', 'bodyText'), any
+-- @content-length@ header is dropped and the runtime computes it, so a
+-- received request can be forwarded with a replaced body. A forwarded
+-- JavaScript body keeps its headers as they are.
 fetch :: Request -> IO Response
 fetch req = do
-  hs <- headerPairs (headers req)
+  hs <- headerPairs (outgoingHeaders (body req) (headers req))
   b <- bodyToJS (body req)
   requestInit <- js_mkInit (bytesToJS (method req)) hs b (redirectToJS (redirect req))
   result <- try (awaitJS (js_fetch (textToJS (url req)) requestInit))
   case result of
     Left err -> throwIO (FetchException (url req) err)
     Right v  -> fromJSResponse v
+
+outgoingHeaders :: Body -> RequestHeaders -> RequestHeaders
+outgoingHeaders (BytesBody _) = filter ((/= hContentLength) . fst)
+outgoingHeaders (JSBody _)    = id
 
 redirectToJS :: Redirect -> JSString
 redirectToJS Follow = textToJS "follow"
