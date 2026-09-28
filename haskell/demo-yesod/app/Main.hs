@@ -52,7 +52,7 @@ getHelloR name = defaultLayout $ do
       <a href=@{HomeR}>Back
   |]
 
-foreign export javascript "waiMain" main :: IO ()
+foreign export javascript "workerMain" main :: IO ()
 
 main :: IO ()
 main = do

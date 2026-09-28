@@ -8,6 +8,7 @@
 --
 -- * @\/echo@ dumps the 'Request' the handler built, including the body
 -- * @\/stream@ answers with 'responseStream'
+-- * @\/ctx@ reports whether the ExecutionContext reached the vault
 module Main (main) where
 
 import qualified Data.ByteString.Builder        as BB
@@ -15,7 +16,8 @@ import qualified Data.ByteString.Lazy           as BL
 import qualified Data.CaseInsensitive           as CI
 import           Network.HTTP.Types             (status200)
 import           Network.Wai
-import           Network.Wai.Handler.Cloudflare (runCloudflare)
+import           Data.Maybe                     (isJust)
+import           Network.Wai.Handler.Cloudflare (requestContext, runCloudflare)
 
 -- | A wasm reactor module has no entry point of its own, so @main@ has to be
 -- exported explicitly for the JavaScript side to call it once after
@@ -23,7 +25,7 @@ import           Network.Wai.Handler.Cloudflare (runCloudflare)
 --
 -- The name must not collide with a symbol the RTS already declares: @hs_main@,
 -- for one, is taken by @rts\/Main.h@ and fails at the C compilation step.
-foreign export javascript "waiMain" main :: IO ()
+foreign export javascript "workerMain" main :: IO ()
 
 app :: Application
 app req respond = case pathInfo req of
@@ -39,6 +41,12 @@ app req respond = case pathInfo req of
         write (BB.stringUtf8 "chunk one\n")
         flush
         write (BB.stringUtf8 "chunk two\n")
+  ["ctx"] ->
+    respond $
+      responseLBS
+        status200
+        [("Content-Type", "text/plain")]
+        (if isJust (requestContext req) then "context: yes" else "context: no")
   _ -> do
     body <- strictRequestBody req
     respond $
