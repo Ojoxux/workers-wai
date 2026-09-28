@@ -31,7 +31,10 @@ runs `test/*.test.mjs` with Node's test runner. Each test boots a module
 through `worker/src/runtime.mjs` — the same code path as production — with a
 fake `ExecutionContext` and, for outbound fetch, a local HTTP server.
 
-After the first build, `node --test "test/*.test.mjs"` reruns the tests alone.
+After the first build, `node --test --test-force-exit --test-timeout=30000
+"test/*.test.mjs"` reruns the tests alone — plain `node --test` never exits
+once a test has loaded `demo-yesod`, whose background threads keep a JS timer
+alive (see [constraints.md](constraints.md)).
 
 Node is not workerd. To run the shared HTTP-level cases in `test/cases.mjs`
 against the real runtime:

@@ -8,7 +8,9 @@
 --
 -- The runtime also copies string entries into the process environment (see
 -- @envAsEnviron@ in runtime.mjs), so 'System.Environment.lookupEnv' works for
--- code that expects configuration there.
+-- code that expects configuration there. This includes Secrets, not only
+-- @vars@: any string-valued entry of @env@ is copied unless @envAsEnviron@ is
+-- passed as @False@.
 module Cloudflare.Workers.Env
   ( Env
   , var

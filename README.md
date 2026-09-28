@@ -21,8 +21,9 @@ handler is also just a function, so a small adapter is enough to connect them.
 ```
 
 The Haskell code is compiled by GHC's wasm backend to a wasm32-wasi reactor
-module, which `worker/src/index.mjs` instantiates once per isolate and then calls
-for every fetch event.
+module. `worker/src/index.mjs` delegates to `makeWorker` in
+`worker/src/runtime.mjs`, which instantiates the module once per isolate and
+then calls it for every fetch event.
 
 ## Status
 

@@ -78,8 +78,12 @@ application still writes exactly one `foreign export`.
 
 WAI's continuation-passing shape — `Application = Request -> (Response -> IO
 ResponseReceived) -> IO ResponseReceived` — cannot be observed from JavaScript,
-so `handleRequest` passes a continuation that captures the `Response` and then
-converts it.
+so `serve`, in `Network.Wai.Handler.Cloudflare` (haskell/wai-handler-cloudflare),
+passes the `Application` a continuation that captures the `Response` it is
+given into an `IORef`, then converts that into a `Cloudflare.Workers.Fetch.Response`.
+That conversion is what `runCloudflareWith` registers as the `Handler`;
+`Cloudflare.Workers.Entry.handleRequest` just calls it and hands the result
+back to JavaScript.
 
 ## Crossing the FFI boundary
 
@@ -99,17 +103,22 @@ The outer constructor copies, so the result stays valid after the Haskell buffer
 is collected. A synchronous import cannot trigger a GC, which is what makes the
 raw pointer sound — the same guarantee an `unsafe` C FFI call relies on.
 
-**Request bodies.** The reverse, and asynchronous because the body has to be
-awaited:
+**Request bodies.** The reverse, and read lazily: a JavaScript body is not
+awaited when a `Request` or `Response` is converted, only when
+`Cloudflare.Workers.Fetch.bytes` (or `text`) is actually called, through an
+asynchronous (`safe`) import:
 
 ```haskell
-foreign import javascript safe
-  "const b = await $1.arrayBuffer(); return new Uint8Array(b);"
-  js_reqBody :: JSVal -> IO JSVal
+foreign import javascript safe "return new Uint8Array(await $1.arrayBuffer());"
+  js_readBytes :: JSVal -> IO JSVal
 ```
 
 Only the calling Haskell thread suspends on the promise. A second, synchronous
-import then writes the `Uint8Array` into a freshly allocated `ByteString`.
+import then copies the `Uint8Array` into a freshly allocated `ByteString`. A
+`cloudflare-workers` handler that never calls `bytes`/`text` never awaits the
+request body at all; `wai-handler-cloudflare`'s `toWaiRequest` calls `F.bytes`
+up front, so a WAI `Application` always sees the body read in full before it
+runs.
 
 **Headers.** Encoded as a single NUL-separated string of alternating names and
 values. A NUL can never appear in an HTTP header, and this keeps a JSON library
@@ -126,7 +135,9 @@ describe.
 The implemented set is read off the compiled module rather than assumed; see
 [development.md](development.md). Broadly:
 
-- **argv / environ** — an empty environment and a single fake argv entry
+- **argv / environ** — a single fake argv entry, and an environ built from the
+  string-valued entries of the Worker's `env` (unless `makeWorker` is called
+  with `envAsEnviron: false`, in which case it is empty)
 - **clocks** — `Date.now()`, which Workers deliberately keeps coarse
 - **stdout / stderr** — line-buffered into `console.log` / `console.error`
 - **filesystem** — none. `fd_prestat_get` returns `EBADF` for fd 3, which is how

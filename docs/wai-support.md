@@ -55,8 +55,10 @@ main = runCloudflareWith $ \env -> do
   toWaiAppPlain (App key)
 ```
 
-String entries are also in the process environment, so `lookupEnv` works.
-Inside a handler, `requestContext req` returns the `Context` for `waitUntil`.
+String entries — Secrets as well as `vars` — are also copied into the process
+environment unless `envAsEnviron: false` is passed to `makeWorker`, so
+`lookupEnv` works. Inside a handler, `requestContext req` returns the
+`Context` for `waitUntil`.
 
 ## Not supported
 

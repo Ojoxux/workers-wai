@@ -163,12 +163,15 @@ responseBody = rBody
 -- Sending
 -- ---------------------------------------------------------------------------
 
--- | The request failed before any response arrived: DNS, connection, TLS,
--- an invalid URL. HTTP error statuses are ordinary 'Response's.
+-- | The request failed before any response arrived: DNS, connection, TLS, an
+-- invalid URL, or the runtime's own request validation — an invalid header
+-- character, a body on a @GET@ or @HEAD@, an unrecognised method. Anything
+-- @fetch()@ itself rejects arrives here, as a 'FetchException'. HTTP error
+-- statuses are ordinary 'Response's, not exceptions.
 --
--- Checks made before anything is sent are not wrapped: a NUL in a header
--- throws a 'JSError' named @TypeError@, and an already-used body throws
--- 'BodyAlreadyUsed'.
+-- Only the package's own pre-send checks are thrown unwrapped, before
+-- @fetch()@ is even called: a NUL in a header throws a 'JSError' named
+-- @TypeError@, and an already-used body throws 'BodyAlreadyUsed'.
 data FetchException = FetchException
   { fetchUrl   :: Text
   , fetchCause :: JSError
