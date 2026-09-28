@@ -6,10 +6,10 @@ module Main (main) where
 
 import           Cloudflare.Workers.Context (Context, waitUntil)
 import           Cloudflare.Workers.Entry   (runWorker)
-import           Control.Monad              (void)
 import           Cloudflare.Workers.Env     (Env)
 import qualified Cloudflare.Workers.Env     as Env
 import qualified Cloudflare.Workers.Fetch   as F
+import           Control.Monad              (void)
 import qualified Data.ByteString            as B
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
@@ -68,6 +68,10 @@ route env req ctx =
       pure (ok "queued")
     ["wait", "fail"] -> do
       waitUntil ctx (fail "boom")
+      pure (ok "queued")
+    ["wait", "hold"] -> do
+      up <- Env.var env "UPSTREAM"
+      waitUntil ctx (void (F.fetch F.request {F.url = up <> "/hold"}))
       pure (ok "queued")
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 

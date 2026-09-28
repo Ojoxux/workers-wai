@@ -30,6 +30,9 @@ waitUntil (Context ctx) act = do
 foreign import javascript "wrapper"
   js_asyncCallback :: IO () -> IO JSVal
 
--- | safe: waitUntil throws if called after the request has finished.
-foreign import javascript safe "$1.waitUntil($2())"
+-- | safe: waitUntil throws if called after the request has finished. The
+-- promise is registered with @ctx.waitUntil@ before the action is started:
+-- if the registration throws, @go@ is never called and the action never
+-- runs.
+foreign import javascript safe "let go; const p = new Promise(r => { go = r; }).then(() => $2()); $1.waitUntil(p); go();"
   js_waitUntil :: JSVal -> JSVal -> IO ()

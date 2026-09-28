@@ -20,6 +20,22 @@ test("waitUntil work finishes after the response", async () => {
   assert.ok(upstream.hits.some((h) => h.url === "/beacon"));
 });
 
+test("waitUntil keeps the isolate alive after the response is sent", async () => {
+  const { ctx, pending } = fakeCtx();
+  const res = await worker.fetch(new Request(`${BASE}/wait/hold`), { UPSTREAM: upstream.url }, ctx);
+  assert.equal(await res.text(), "queued");
+  assert.equal(pending.length, 1);
+
+  const timedOut = Symbol("timed out");
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(timedOut), 100));
+  const outcome = await Promise.race([Promise.all(pending), timeout]);
+  assert.equal(outcome, timedOut, "waitUntil work resolved before /hold was released");
+
+  upstream.release();
+  await Promise.all(pending);
+  assert.ok(upstream.hits.some((h) => h.url === "/hold"));
+});
+
 test("an exception in waitUntil work is logged, not rethrown", async () => {
   const logged = [];
   const original = console.error;

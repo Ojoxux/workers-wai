@@ -36,10 +36,13 @@ export function fakeCtx() {
  *   /echo        -> 200 JSON { method, xtest, body }, header x-upstream: yes
  *   /status/:n   -> status n, empty body
  *   /beacon      -> 204
+ *   /hold        -> does not respond until the returned `release()` is called,
+ *                   then 204. Lets a test observe a request as still pending.
  * Every request is recorded in `hits`.
  */
 export function startUpstream() {
   const hits = [];
+  const holds = [];
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -57,6 +60,10 @@ export function startUpstream() {
       res.end();
       return;
     }
+    if (req.url === "/hold") {
+      holds.push(res);
+      return;
+    }
     res.writeHead(req.url === "/beacon" ? 204 : 404);
     res.end();
   });
@@ -67,6 +74,12 @@ export function startUpstream() {
         url: `http://127.0.0.1:${port}`,
         hits,
         close: () => new Promise((r) => server.close(r)),
+        release: () => {
+          for (const res of holds.splice(0)) {
+            res.writeHead(204);
+            res.end();
+          }
+        },
       });
     });
   });
