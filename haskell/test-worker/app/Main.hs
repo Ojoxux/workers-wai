@@ -4,8 +4,9 @@
 -- Driven by test/*.test.mjs; not an example to copy.
 module Main (main) where
 
-import           Cloudflare.Workers.Context (Context)
+import           Cloudflare.Workers.Context (Context, waitUntil)
 import           Cloudflare.Workers.Entry   (runWorker)
+import           Control.Monad              (void)
 import           Cloudflare.Workers.Env     (Env)
 import qualified Cloudflare.Workers.Env     as Env
 import qualified Cloudflare.Workers.Fetch   as F
@@ -21,7 +22,7 @@ main :: IO ()
 main = runWorker $ \env -> pure (route env)
 
 route :: Env -> F.Request -> Context -> IO F.Response
-route env req _ctx =
+route env req ctx =
   case segments (F.url req) of
     ["hello"] -> pure (ok "hello")
     ["status", code]
@@ -61,6 +62,13 @@ route env req _ctx =
       F.fetch req {F.url = up <> "/echo", F.body = F.bodyText "rewritten"}
     ["fetch", "unreachable"] -> F.fetch F.request {F.url = "http://127.0.0.1:1/"}
     ["fetch", "badurl"] -> F.fetch F.request {F.url = "not a url"}
+    ["wait", "beacon"] -> do
+      up <- Env.var env "UPSTREAM"
+      waitUntil ctx (void (F.fetch F.request {F.url = up <> "/beacon"}))
+      pure (ok "queued")
+    ["wait", "fail"] -> do
+      waitUntil ctx (fail "boom")
+      pure (ok "queued")
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 
 ok :: Text -> F.Response
