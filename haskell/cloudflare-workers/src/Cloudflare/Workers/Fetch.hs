@@ -25,6 +25,12 @@ module Cloudflare.Workers.Fetch
   , statusText
   , responseHeaders
   , responseBody
+    -- * Sending
+  , fetch
+    -- * Exceptions
+  , FetchException (..)
+  , JSError (..)
   ) where
 
 import           Cloudflare.Workers.Fetch.Internal
+import           Cloudflare.Workers.Internal.FFI   (JSError (..))

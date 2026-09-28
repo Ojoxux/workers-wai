@@ -23,6 +23,9 @@ module Cloudflare.Workers.Fetch.Internal
   , statusText
   , responseHeaders
   , responseBody
+    -- * Sending
+  , fetch
+  , FetchException (..)
     -- * JavaScript conversion
   , fromJSRequest
   , fromJSResponse
@@ -30,10 +33,11 @@ module Cloudflare.Workers.Fetch.Internal
   , bodyToJS
   ) where
 
-import           Control.Exception               (Exception, throwIO)
+import           Control.Exception               (Exception (..), throwIO, try)
 import           Control.Monad                   (when)
 import qualified Data.ByteString                 as B
 import           Data.Text                       (Text)
+import qualified Data.Text                       as T
 import qualified Data.Text.Encoding              as TE
 import qualified Data.Text.Encoding.Error        as TEE
 import           Network.HTTP.Types              (Method, RequestHeaders,
@@ -105,7 +109,7 @@ bytes (JSBody owner) = do
   ensureUnused owner
   awaitJS (js_readBytes owner) >>= fromJSBytes
 
--- | The body decoded as UTF-8, replacing invalid sequences as @text()@ does.
+-- | The body decoded as UTF-8; invalid bytes become U+FFFD.
 text :: Body -> IO Text
 text b = TE.decodeUtf8With TEE.lenientDecode <$> bytes b
 
@@ -153,6 +157,37 @@ responseHeaders = rHeaders
 
 responseBody :: Response -> Body
 responseBody = rBody
+
+-- ---------------------------------------------------------------------------
+-- Sending
+-- ---------------------------------------------------------------------------
+
+-- | The request failed before any response arrived: DNS, connection, TLS,
+-- an invalid URL. HTTP error statuses are ordinary 'Response's.
+data FetchException = FetchException
+  { fetchUrl   :: Text
+  , fetchCause :: JSError
+  }
+  deriving (Show)
+
+instance Exception FetchException where
+  displayException e =
+    "fetch " <> T.unpack (fetchUrl e) <> " failed: " <> displayException (fetchCause e)
+
+fetch :: Request -> IO Response
+fetch req = do
+  hs <- headerPairs (headers req)
+  b <- bodyToJS (body req)
+  requestInit <- js_mkInit (bytesToJS (method req)) hs b (redirectToJS (redirect req))
+  result <- try (awaitJS (js_fetch (textToJS (url req)) requestInit))
+  case result of
+    Left err -> throwIO (FetchException (url req) err)
+    Right v  -> fromJSResponse v
+
+redirectToJS :: Redirect -> JSString
+redirectToJS Follow = textToJS "follow"
+redirectToJS Manual = textToJS "manual"
+redirectToJS Error  = textToJS "error"
 
 -- ---------------------------------------------------------------------------
 -- JavaScript conversion
@@ -244,8 +279,15 @@ foreign import javascript unsafe "$1.body"
 foreign import javascript safe "new Response($1, { status: $2, statusText: $3, headers: $4 })"
   js_mkResponse :: JSVal -> Int -> JSString -> JSVal -> IO JSVal
 
-foreign import javascript unsafe "$1.bodyUsed"
+foreign import javascript unsafe "$1.bodyUsed || ($1.body?.locked ?? false)"
   js_bodyUsed :: JSVal -> IO Bool
 
 foreign import javascript safe "return new Uint8Array(await $1.arrayBuffer());"
   js_readBytes :: JSVal -> IO JSVal
+
+-- | duplex: 'half' is required when the body is a stream (a proxied request).
+foreign import javascript unsafe "({ method: $1, headers: $2, body: $3, redirect: $4, duplex: 'half' })"
+  js_mkInit :: JSString -> JSVal -> JSVal -> JSString -> IO JSVal
+
+foreign import javascript safe "fetch($1, $2)"
+  js_fetch :: JSString -> JSVal -> IO JSVal

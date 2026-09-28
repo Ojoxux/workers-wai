@@ -31,9 +31,33 @@ route env req _ctx =
     ["body", "twice"] -> do
       _ <- F.bytes (F.body req)
       ok . T.pack . show . B.length <$> F.bytes (F.body req)
+    ["body", "forward-after-read"] -> do
+      _ <- F.bytes (F.body req)
+      pure (F.response 200 [] (F.body req))
     ["env", "var", name] -> ok <$> Env.var env name
     ["env", "lookup", name] -> ok . T.pack . show <$> Env.lookupVar env name
     ["env", "environ", name] -> ok . T.pack . show <$> lookupEnv (T.unpack name)
+    ["fetch", "roundtrip"] -> do
+      up <- Env.var env "UPSTREAM"
+      res <-
+        F.fetch
+          F.request
+            { F.method = "PUT"
+            , F.url = up <> "/echo"
+            , F.headers = [("x-test", "hello")]
+            , F.body = F.bodyText "payload"
+            }
+      b <- F.bytes (F.responseBody res)
+      pure (F.response (F.status res) [("content-type", "application/json")] (F.bodyBytes b))
+    ["fetch", "status", code] -> do
+      up <- Env.var env "UPSTREAM"
+      res <- F.fetch F.request {F.url = up <> "/status/" <> code}
+      pure (ok ("status=" <> T.pack (show (F.status res))))
+    ["fetch", "proxy"] -> do
+      up <- Env.var env "UPSTREAM"
+      F.fetch req {F.url = up <> "/echo"}
+    ["fetch", "unreachable"] -> F.fetch F.request {F.url = "http://127.0.0.1:1/"}
+    ["fetch", "badurl"] -> F.fetch F.request {F.url = "not a url"}
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 
 ok :: Text -> F.Response
