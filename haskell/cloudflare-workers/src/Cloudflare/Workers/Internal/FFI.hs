@@ -114,10 +114,19 @@ toJSBytes bs =
 -- (latin-1), which is how the Fetch spec defines header ByteStrings.
 
 -- | Build a JS array of @[name, value]@ pairs, accepted by @new Headers@.
+--
+-- Throws 'JSError' (a @TypeError@, as the Fetch API would for an invalid
+-- header) if any name or value contains NUL, which would otherwise split into
+-- extra headers on the JavaScript side.
 headerPairs :: [Header] -> IO JSVal
-headerPairs hs =
-  js_headerPairs . toJSString . intercalate "\NUL" $
-    concatMap (\(name, value) -> [BC.unpack (CI.original name), BC.unpack value]) hs
+headerPairs hs
+  | any (\(name, value) -> hasNul (CI.original name) || hasNul value) hs =
+      throwIO (JSError "TypeError" "header name or value contains NUL" "")
+  | otherwise =
+      js_headerPairs . toJSString . intercalate "\NUL" $
+        concatMap (\(name, value) -> [BC.unpack (CI.original name), BC.unpack value]) hs
+  where
+    hasNul = B.elem 0
 
 -- | Decode the output of @[...headers].flat().join('\\0')@.
 decodeHeaders :: JSString -> [Header]
@@ -160,13 +169,16 @@ consoleError = js_consoleError . textToJS
 -- Imports. All unsafe: none of these can throw.
 -- ---------------------------------------------------------------------------
 
-foreign import javascript unsafe "String($1?.name ?? 'Error')"
+-- The error accessors run on arbitrary thrown values, whose getters or
+-- toString may themselves throw: each is wrapped so that it cannot.
+
+foreign import javascript unsafe "(() => { try { return String($1?.name ?? 'Error'); } catch { return 'Error'; } })()"
   js_errorName :: JSVal -> IO JSString
 
-foreign import javascript unsafe "String($1?.message ?? $1)"
+foreign import javascript unsafe "(() => { try { return String($1?.message ?? $1); } catch { return '<unprintable>'; } })()"
   js_errorMessage :: JSVal -> IO JSString
 
-foreign import javascript unsafe "String($1?.stack ?? '')"
+foreign import javascript unsafe "(() => { try { return String($1?.stack ?? ''); } catch { return ''; } })()"
   js_errorStack :: JSVal -> IO JSString
 
 foreign import javascript unsafe "$1.length"

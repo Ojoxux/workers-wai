@@ -22,7 +22,7 @@ route _env req _ctx =
   case segments (F.url req) of
     ["hello"] -> pure (ok "hello")
     ["status", code]
-      | Just n <- readMaybe (T.unpack code) -> pure (F.response n [] F.noBody)
+      | Just n <- readMaybe (T.unpack code) -> pure (F.response n [] (F.bodyText "x"))
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 
 ok :: Text -> F.Response

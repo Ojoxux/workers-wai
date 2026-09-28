@@ -49,12 +49,14 @@ export function makeWorker(wasmModule, jsffi, { envAsEnviron = true } = {}) {
     async fetch(request, env = {}, ctx) {
       if (booted === null) booted = boot(env);
 
+      const pending = booted;
       let instance;
       try {
-        instance = await booted;
+        instance = await pending;
       } catch (err) {
-        // Let the next request retry rather than wedging the isolate.
-        booted = null;
+        // Let the next request retry rather than wedging the isolate, unless a
+        // later request has already started a new boot.
+        if (booted === pending) booted = null;
         return new Response(`wasm boot failed: ${err?.stack ?? err}\n`, {
           status: 500,
           headers: { "content-type": "text/plain; charset=utf-8" },

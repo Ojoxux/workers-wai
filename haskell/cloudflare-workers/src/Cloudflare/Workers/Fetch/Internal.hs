@@ -97,6 +97,10 @@ data Response = Response
   , rOriginal   :: Maybe JSVal
     -- ^ The JS @Response@ this came from, if any. Returned to the runtime
     -- as is, so that proxying does not copy the body through wasm memory.
+    --
+    -- When this is @Just@, 'toJSResponse' returns the original JS @Response@
+    -- and ignores every other field: anything that changes a 'Response''s
+    -- fields must also set @rOriginal = Nothing@.
   }
 
 response :: Int -> ResponseHeaders -> Body -> Response
@@ -169,6 +173,9 @@ toJSResponse r = case rOriginal r of
     awaitJS (js_mkResponse b (rStatus r) (bytesToJS (rStatusText r)) hs)
 
 -- | @new Response(body, ...)@ throws for these unless the body is @null@.
+--
+-- 101 is listed for completeness: @new Response@ rejects it regardless, as it
+-- is only valid for WebSocket upgrades, which are not supported.
 hasNullBody :: Int -> Bool
 hasNullBody code = code `elem` [101, 204, 205, 304]
 

@@ -54,7 +54,10 @@ runWorker mk = do
   env <-
     readIORef envRef
       >>= maybe
-        (fail "cloudflare-workers: setEnv was not called before workerMain - start the worker with makeWorker from runtime.mjs")
+        ( fail $
+            "cloudflare-workers: setEnv was not called before workerMain - "
+              <> "start the worker with makeWorker from runtime.mjs"
+        )
         pure
   handler <- mk env
   writeIORef handlerRef (Just handler)
@@ -69,7 +72,10 @@ handleRequest jsReq jsCtx = do
     handler <-
       readIORef handlerRef
         >>= maybe
-          (fail "cloudflare-workers: no handler registered - did workerMain call runWorker?")
+          ( fail $
+              "cloudflare-workers: no handler registered - "
+                <> "did workerMain call runWorker?"
+          )
           pure
     req <- fromJSRequest jsReq
     res <- handler req (Context jsCtx)
