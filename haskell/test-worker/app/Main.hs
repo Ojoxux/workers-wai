@@ -11,6 +11,8 @@ import qualified Cloudflare.Workers.Env     as Env
 import qualified Cloudflare.Workers.Fetch   as F
 import           Control.Monad              (void)
 import qualified Data.ByteString            as B
+import qualified Data.ByteString.Char8      as BC
+import           Data.CaseInsensitive       (original)
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
 import           System.Environment         (lookupEnv)
@@ -73,6 +75,19 @@ route env req ctx =
       up <- Env.var env "UPSTREAM"
       waitUntil ctx (void (F.fetch F.request {F.url = up <> "/hold"}))
       pure (ok "queued")
+    ["cookies", "set"] ->
+      pure (F.response 200 [("set-cookie", "a=1; Path=/"), ("set-cookie", "b=2; Path=/")] (F.bodyText "ok"))
+    ["cookies", "fetched"] -> do
+      up <- Env.var env "UPSTREAM"
+      res <- F.fetch F.request {F.url = up <> "/cookies"}
+      let cookies = [v | (n, v) <- F.responseHeaders res, n == "set-cookie"]
+      pure (ok (T.intercalate "|" (map (T.pack . BC.unpack) cookies)))
+    ["cookies", "proxy"] -> do
+      up <- Env.var env "UPSTREAM"
+      F.fetch F.request {F.url = up <> "/cookies"}
+    ["headers", "echo"] -> do
+      let line (n, v) = T.pack (BC.unpack (original n)) <> ": " <> T.pack (BC.unpack v)
+      pure (ok (T.intercalate "\n" (map line (F.headers req))))
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 
 ok :: Text -> F.Response

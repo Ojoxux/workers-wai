@@ -38,6 +38,7 @@ export function fakeCtx() {
  *   /beacon      -> 204
  *   /hold        -> does not respond until the returned `release()` is called,
  *                   then 204. Lets a test observe a request as still pending.
+ *   /cookies     -> 200 with two Set-Cookie headers, x=1 and y=2.
  * Every request is recorded in `hits`.
  */
 export function startUpstream() {
@@ -62,6 +63,12 @@ export function startUpstream() {
     }
     if (req.url === "/hold") {
       holds.push(res);
+      return;
+    }
+    if (req.url === "/cookies") {
+      res.setHeader("set-cookie", ["x=1", "y=2"]);
+      res.writeHead(200);
+      res.end();
       return;
     }
     res.writeHead(req.url === "/beacon" ? 204 : 404);

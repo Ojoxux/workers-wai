@@ -10,6 +10,7 @@ executable test-worker
   build-depends:
     , base
     , bytestring
+    , case-insensitive
     , cloudflare-workers
     , text
 
