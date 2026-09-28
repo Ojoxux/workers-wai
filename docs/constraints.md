@@ -56,6 +56,25 @@ timers keep firing between requests on workerd — and if so, whether that
 costs anything — is not verified; this is an open question, not a claim that
 it is harmless.
 
+## `waitUntil` work keeps running after the response on workerd
+
+`scripts/check-wrangler.mjs` checks this under `wrangler dev` (wrangler
+4.129.1), with the same expectations as the Node tests:
+
+- `/wait/beacon` returns `queued`, and the upstream then receives the
+  `/beacon` fetch made inside `waitUntil`.
+- `/wait/hold` returns `queued` while the upstream is still holding the
+  `/hold` request open. After the upstream releases it, wrangler logs nothing
+  further — no uncaught exception, no `waitUntil:` error.
+- A failing `waitUntil` action (`/wait/fail`) is logged by workerd as
+  `✘ [ERROR] waitUntil: user error (boom)`, and the request still gets its 200.
+  This shows the "nothing logged" check above would have caught a failure.
+
+Outbound `fetch` from the wasm module to an upstream on `127.0.0.1` works
+under `wrangler dev` with no extra configuration, and every check that passes
+under Node also passes there. No behaviour difference between Node and workerd
+has been found.
+
 ## A `safe` import's result is a lazy thunk
 
 The effect is not awaited, and a rejection is not raised, until the result is

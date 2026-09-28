@@ -36,13 +36,21 @@ After the first build, `node --test --test-force-exit --test-timeout=30000
 once a test has loaded `demo-yesod`, whose background threads keep a JS timer
 alive (see [constraints.md](constraints.md)).
 
-Node is not workerd. To run the shared HTTP-level cases in `test/cases.mjs`
-against the real runtime:
+Node is not workerd. To check `test-worker` against the real runtime:
 
 ```sh
-worker/node_modules/.bin/wrangler dev -c test/wrangler.toml --port 8788
 node scripts/check-wrangler.mjs
 ```
+
+It needs a build of `test-worker` in `.test-build/` (`scripts/test.sh` makes
+one). The script starts the upstream server from `test/harness.mjs`, runs
+`wrangler dev -c test/wrangler.toml` on a free port with `UPSTREAM` pointing at
+it, waits for `/hello`, and then runs the shared cases in `test/cases.mjs` plus
+workerd-only checks that need the upstream: outbound fetch, Set-Cookie
+passthrough, and `waitUntil` work continuing after the response. wrangler and
+the upstream are stopped on exit, failure or Ctrl-C. `SHOW_WRANGLER_LOG=1`
+prints wrangler's log even when everything passes (it is always printed on
+failure).
 
 ## The build script
 
