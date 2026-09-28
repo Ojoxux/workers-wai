@@ -100,7 +100,9 @@ bodyText = BytesBody . TE.encodeUtf8
 data BodyAlreadyUsed = BodyAlreadyUsed
   deriving (Show)
 
-instance Exception BodyAlreadyUsed
+instance Exception BodyAlreadyUsed where
+  displayException BodyAlreadyUsed =
+    "body already used: a body can be read or forwarded only once"
 
 -- | The whole body. A JavaScript body can be read once; bytes built in
 -- Haskell any number of times.

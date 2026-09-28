@@ -19,13 +19,13 @@ test("var returns a string entry", async () => {
 test("var throws EnvMissing for an absent entry", async () => {
   const { status, text } = await get(worker, "/env/var/NOPE");
   assert.equal(status, 500);
-  assert.match(text, /EnvMissing "NOPE"/);
+  assert.match(text, /env: NOPE is not set/);
 });
 
 test("var throws EnvTypeMismatch for a non-string entry", async () => {
   const { status, text } = await get(worker, "/env/var/COUNT");
   assert.equal(status, 500);
-  assert.match(text, /EnvTypeMismatch "COUNT" "number"/);
+  assert.match(text, /env: COUNT is a number, not a string/);
 });
 
 test("lookupVar returns Nothing for an absent entry", async () => {

@@ -18,8 +18,9 @@ module Cloudflare.Workers.Env
   , EnvException (..)
   ) where
 
-import           Control.Exception               (Exception, throwIO)
+import           Control.Exception               (Exception (..), throwIO)
 import           Data.Text                       (Text)
+import qualified Data.Text                       as T
 
 import           Cloudflare.Workers.Internal     (Env, lookupBinding)
 import           Cloudflare.Workers.Internal.FFI
@@ -31,7 +32,10 @@ data EnvException
     -- ^ The entry exists but is not a string: name, and its JS @typeof@.
   deriving (Show)
 
-instance Exception EnvException
+instance Exception EnvException where
+  displayException (EnvMissing n) = "env: " <> T.unpack n <> " is not set"
+  displayException (EnvTypeMismatch n ty) =
+    "env: " <> T.unpack n <> " is a " <> T.unpack ty <> ", not a string"
 
 -- | A string entry. Throws 'EnvException' if it is absent or not a string.
 var :: Env -> Text -> IO Text

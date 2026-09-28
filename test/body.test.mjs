@@ -29,11 +29,11 @@ test("text decodes UTF-8", async () => {
 test("a second read throws BodyAlreadyUsed", async () => {
   const res = await send("/body/twice", { method: "POST", body: "x" });
   assert.equal(res.status, 500);
-  assert.match(await res.text(), /BodyAlreadyUsed/);
+  assert.match(await res.text(), /body already used/);
 });
 
 test("forwarding a body after reading it throws BodyAlreadyUsed", async () => {
   const res = await send("/body/forward-after-read", { method: "POST", body: "x" });
   assert.equal(res.status, 500);
-  assert.match(await res.text(), /BodyAlreadyUsed/);
+  assert.match(await res.text(), /body already used/);
 });

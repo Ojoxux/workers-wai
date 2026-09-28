@@ -8,10 +8,10 @@ export const cases = [
   { name: "hello", path: "/hello", status: 200, body: "hello" },
   { name: "env var", path: "/env/var/GREETING", status: 200, body: "hello from vars" },
   { name: "env as environ", path: "/env/environ/GREETING", status: 200, body: 'Just "hello from vars"' },
-  { name: "missing var", path: "/env/var/NOPE", status: 500, includes: "EnvMissing" },
+  { name: "missing var", path: "/env/var/NOPE", status: 500, includes: "is not set" },
   { name: "null-body status", path: "/status/204", status: 204, body: "" },
   { name: "body echo", method: "POST", path: "/body/echo", requestBody: "hello body", status: 200, body: "hello body" },
-  { name: "body read twice", method: "POST", path: "/body/twice", requestBody: "x", status: 500, includes: "BodyAlreadyUsed" },
+  { name: "body read twice", method: "POST", path: "/body/twice", requestBody: "x", status: 500, includes: "body already used" },
   { name: "bad url", path: "/fetch/badurl", status: 500, includes: "TypeError" },
   { name: "invalid status", path: "/status/99", status: 500, includes: "RangeError" },
 ];
