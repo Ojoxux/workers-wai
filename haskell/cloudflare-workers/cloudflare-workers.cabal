@@ -1,0 +1,33 @@
+cabal-version:   3.0
+name:            cloudflare-workers
+version:         0.1.0.0
+synopsis:        Haskell bindings to the Cloudflare Workers runtime
+description:
+  Typed bindings to the Workers runtime for programs compiled with GHC's wasm
+  backend: the Fetch API, the env object, the ExecutionContext, and an entry
+  point that the JavaScript runtime in worker/src/runtime.mjs drives.
+
+license:         BSD-3-Clause
+build-type:      Simple
+
+library
+  hs-source-dirs:   src
+  exposed-modules:
+    Cloudflare.Workers.Context
+    Cloudflare.Workers.Entry
+    Cloudflare.Workers.Env
+    Cloudflare.Workers.Fetch
+    Cloudflare.Workers.Fetch.Internal
+    Cloudflare.Workers.Internal
+    Cloudflare.Workers.Internal.FFI
+  build-depends:
+    , base             >=4.17 && <5
+    , bytestring
+    , case-insensitive
+    -- GHC.Wasm.Prim: ties the package to GHC's wasm backend.
+    , ghc-experimental
+    , http-types
+    , text
+
+  default-language: Haskell2010
+  ghc-options:      -Wall

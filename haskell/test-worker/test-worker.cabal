@@ -1,0 +1,20 @@
+cabal-version:   3.0
+name:            test-worker
+version:         0.1.0.0
+synopsis:        Worker driven by test/*.test.mjs
+build-type:      Simple
+
+executable test-worker
+  main-is:          Main.hs
+  hs-source-dirs:   app
+  build-depends:
+    , base
+    , bytestring
+    , cloudflare-workers
+    , text
+
+  default-language: Haskell2010
+  ghc-options:
+    -Wall -O1
+    -no-hs-main
+    -optl-mexec-model=reactor
