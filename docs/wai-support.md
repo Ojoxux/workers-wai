@@ -41,8 +41,9 @@ a `null` body, because `new Response(body, ...)` rejects a body for those. A
 header name or value containing NUL is rejected with a `500` rather than being
 split into extra headers.
 
-Uncaught exceptions in the `Application` become a `500` carrying the exception
-text, and are also written to `console.error`.
+Uncaught exceptions in the `Application` become a generic `500`; the exception
+text goes to `console.error`, not to the client. See
+[Error responses](architecture.md#error-responses).
 
 ## Env and ExecutionContext
 

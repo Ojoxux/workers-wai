@@ -4,7 +4,7 @@ import { makeWorker } from "../worker/src/runtime.mjs";
 import { BASE, fakeCtx, loadWasm, loadWorker } from "./harness.mjs";
 
 test("a throwing Response constructor becomes a 500, not a crash", async () => {
-  const worker = await loadWorker("test-worker");
+  const worker = await loadWorker("test-worker", { exposeErrors: true });
   const { ctx } = fakeCtx();
   const res = await worker.fetch(new Request(`${BASE}/status/99`), {}, ctx);
   assert.equal(res.status, 500);
@@ -23,7 +23,7 @@ test("a failed boot is retried on the next request", async () => {
     if (calls === 1) throw new Error("injected boot failure");
     return jsffi(exports);
   };
-  const worker = makeWorker(wasmModule, flaky);
+  const worker = makeWorker(wasmModule, flaky, { exposeErrors: true });
 
   const first = await worker.fetch(new Request(`${BASE}/hello`), {}, fakeCtx().ctx);
   assert.equal(first.status, 500);

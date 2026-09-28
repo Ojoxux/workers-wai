@@ -4,4 +4,5 @@ import wasmModule from "../.test-build/test-worker/app.wasm";
 import jsffi from "../.test-build/test-worker/ghc_wasm_jsffi.js";
 import { makeWorker } from "../worker/src/runtime.mjs";
 
-export default makeWorker(wasmModule, jsffi);
+// exposeErrors: the shared cases in test/cases.mjs assert on exception text.
+export default makeWorker(wasmModule, jsffi, { exposeErrors: true });

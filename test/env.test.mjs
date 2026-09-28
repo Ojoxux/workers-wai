@@ -10,7 +10,8 @@ async function get(worker, path) {
   return { status: res.status, text: await res.text() };
 }
 
-const worker = await loadWorker("test-worker");
+// exposeErrors: several tests assert on the exception text in 500 bodies.
+const worker = await loadWorker("test-worker", { exposeErrors: true });
 
 test("var returns a string entry", async () => {
   assert.deepEqual(await get(worker, "/env/var/GREETING"), { status: 200, text: "hi" });

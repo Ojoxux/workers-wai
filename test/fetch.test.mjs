@@ -7,7 +7,8 @@ let worker;
 
 before(async () => {
   upstream = await startUpstream();
-  worker = await loadWorker("test-worker");
+  // exposeErrors: several tests assert on the exception text in 500 bodies.
+  worker = await loadWorker("test-worker", { exposeErrors: true });
 });
 after(() => upstream.close());
 

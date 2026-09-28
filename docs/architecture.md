@@ -36,20 +36,47 @@ haskell/shims/*                stand-ins for packages that lack a wasm build
    as the exports table and filled in afterwards.
 2. `wasi.initialize(instance)` calls `_initialize` once: wasm constructors and
    the Haskell RTS.
-3. `setEnv(env)` hands the env object to `Cloudflare.Workers.Entry`.
+3. `setEnv(env, exposeErrors)` hands the env object, and whether 500s may
+   carry exception details, to `Cloudflare.Workers.Entry`.
 4. `workerMain()` runs the application's `main`, which calls `runWorker` (or
    `runCloudflareWith`). That builds the handler from the env, stores it, and
    returns.
 5. **Every request** — `handleRequest(request, ctx)` converts the JS
    `Request`, runs the handler, and converts the result. JSFFI exports are
    asynchronous, so JavaScript receives a `Promise<Response>`. An exception
-   becomes a 500 and is written to `console.error`.
+   becomes a generic 500, and its details are written to `console.error`.
 
 Instantiation is deferred to the first request rather than done at module scope,
 so it is billed as request time instead of counting against the much tighter
 startup CPU time limit. The promise is cached, so concurrent first requests share
-one boot; a failed boot clears the cache so the next request retries rather than
+one boot; a failed boot answers that request with a generic 500, logs the stack
+to `console.error`, and clears the cache so the next request retries rather than
 wedging the isolate.
+
+## Error responses
+
+Clients never see exception details by default — the same choice Warp, Yesod,
+Express and Workers' own error 1101 page make. An uncaught exception in the
+handler, or a failed boot, produces:
+
+```
+HTTP/1.1 500 Internal Server Error
+content-type: text/plain; charset=utf-8
+
+Internal Server Error
+ray: 8c1f0e2b9a7d4e31-NRT
+```
+
+The full detail — the exception text, or the boot failure's stack — goes to
+`console.error` with the same `ray: <id>` line. The id is the request's
+`cf-ray` header, which Cloudflare sets on every request, or a generated UUID
+where there is none (as under Node, or for some `wrangler dev` requests). Search
+`wrangler tail` or Workers Logs for the id a client reports to find the cause.
+
+For development, `makeWorker(wasm, jsffi, { exposeErrors: true })` puts the
+detail in the body as well, followed by the ray line. `worker/src/index.mjs`
+leaves it off; `test/worker.mjs` turns it on so the shared cases can assert on
+exception text.
 
 For GHC 9.12 this sequence — instantiate, knot-tie, `_initialize`, call exports —
 is complete. There is no separate JSFFI init function to invoke.

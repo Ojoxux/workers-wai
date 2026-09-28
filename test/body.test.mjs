@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BASE, fakeCtx, loadWorker } from "./harness.mjs";
 
-const worker = await loadWorker("test-worker");
+// exposeErrors: several tests assert on the exception text in 500 bodies.
+const worker = await loadWorker("test-worker", { exposeErrors: true });
 
 async function send(path, init) {
   const { ctx } = fakeCtx();

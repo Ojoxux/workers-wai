@@ -5,7 +5,7 @@
 --
 -- worker/src/runtime.mjs calls, in order:
 --
--- 1. @setEnv(env)@, defined here, once per isolate;
+-- 1. @setEnv(env, exposeErrors)@, defined here, once per isolate;
 -- 2. @workerMain()@, exported by the application, which calls 'runWorker';
 -- 3. @handleRequest(request, ctx)@, defined here, for every fetch event.
 --
@@ -41,11 +41,19 @@ handlerRef :: IORef (Maybe Handler)
 handlerRef = unsafePerformIO (newIORef Nothing)
 {-# NOINLINE handlerRef #-}
 
-foreign export javascript "setEnv"
-  setEnv :: JSVal -> IO ()
+-- | Whether a 500 may carry exception details. Off unless makeWorker was
+-- given @exposeErrors: true@.
+exposeErrorsRef :: IORef Bool
+exposeErrorsRef = unsafePerformIO (newIORef False)
+{-# NOINLINE exposeErrorsRef #-}
 
-setEnv :: JSVal -> IO ()
-setEnv = writeIORef envRef . Just . Env
+foreign export javascript "setEnv"
+  setEnv :: JSVal -> Bool -> IO ()
+
+setEnv :: JSVal -> Bool -> IO ()
+setEnv env exposeErrors = do
+  writeIORef exposeErrorsRef exposeErrors
+  writeIORef envRef (Just (Env env))
 
 -- | Build the handler from the env, once, and serve every later request
 -- with it. Returns immediately: the runtime drives the requests.
@@ -68,6 +76,8 @@ foreign export javascript "handleRequest"
 
 handleRequest :: JSVal -> JSVal -> IO JSVal
 handleRequest jsReq jsCtx = do
+  -- First, so that a failure anywhere below can still be reported under it.
+  ray <- textFromJS <$> js_rayId jsReq
   result <- try $ do
     handler <-
       readIORef handlerRef
@@ -83,6 +93,16 @@ handleRequest jsReq jsCtx = do
   case result of
     Right jsRes -> pure jsRes
     Left (err :: SomeException) -> do
-      let msg = "cloudflare-workers: unhandled exception\n" <> T.pack (displayException err)
-      consoleError msg
-      toJSResponse (response 500 [(hContentType, "text/plain; charset=utf-8")] (bodyText msg))
+      let detail = "cloudflare-workers: unhandled exception\n" <> T.pack (displayException err)
+          rayLine = "ray: " <> ray <> "\n"
+      consoleError (detail <> "\n" <> rayLine)
+      exposeErrors <- readIORef exposeErrorsRef
+      let body
+            | exposeErrors = detail <> "\n" <> rayLine
+            | otherwise = "Internal Server Error\n" <> rayLine
+      toJSResponse (response 500 [(hContentType, "text/plain; charset=utf-8")] (bodyText body))
+
+-- | The request's @cf-ray@ header, or a fresh UUID when it has none, to tie
+-- a 500 body to its @console.error@ line. Wrapped so that it cannot throw.
+foreign import javascript unsafe "(() => { try { const r = $1.headers.get('cf-ray'); if (r) return r; } catch {} return crypto.randomUUID(); })()"
+  js_rayId :: JSVal -> IO JSString

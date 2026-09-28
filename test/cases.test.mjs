@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { cases, check, env } from "./cases.mjs";
 import { BASE, fakeCtx, loadWorker } from "./harness.mjs";
 
-const worker = await loadWorker("test-worker");
+// exposeErrors: several tests assert on the exception text in 500 bodies.
+const worker = await loadWorker("test-worker", { exposeErrors: true });
 const send = (path, init) => worker.fetch(new Request(`${BASE}${path}`, init), env, fakeCtx().ctx);
 
 for (const c of cases) {

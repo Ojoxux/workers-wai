@@ -11,15 +11,31 @@
 //      is false), so System.Environment.lookupEnv sees Secrets and vars
 //   2. instantiate, tying the JSFFI knot
 //   3. _initialize: wasm constructors and the Haskell RTS
-//   4. setEnv(env): hands the env object to Haskell
+//   4. setEnv(env, exposeErrors): hands the env object to Haskell
 //   5. workerMain(): the application's main, which calls runWorker
+//
+// A failure, in the boot or in a request, is answered with a bare 500 and a
+// ray id (the cf-ray header, or a generated UUID); the details go to
+// console.error under the same id. exposeErrors: true, for development, puts
+// the details in the response body as well.
 //
 // Instantiation happens on the first request rather than at module scope, so
 // it is billed as request time instead of against the startup CPU limit.
 
 import { createWasi } from "./wasi.mjs";
 
-export function makeWorker(wasmModule, jsffi, { envAsEnviron = true } = {}) {
+// The request's cf-ray header, or a fresh UUID when it has none: ties a 500
+// body to its console.error line. Cloudflare.Workers.Entry does the same.
+function rayId(request) {
+  try {
+    const ray = request.headers.get("cf-ray");
+    if (ray) return ray;
+  } catch {}
+  return crypto.randomUUID();
+}
+
+export function makeWorker(wasmModule, jsffi, { envAsEnviron = true, exposeErrors = false } = {}) {
+  exposeErrors = exposeErrors === true;
   let booted = null;
 
   async function boot(env) {
@@ -40,7 +56,7 @@ export function makeWorker(wasmModule, jsffi, { envAsEnviron = true } = {}) {
     Object.assign(exports, instance.exports);
     wasi.initialize(instance);
 
-    await instance.exports.setEnv(env);
+    await instance.exports.setEnv(env, exposeErrors);
     await instance.exports.workerMain();
     return instance;
   }
@@ -57,7 +73,10 @@ export function makeWorker(wasmModule, jsffi, { envAsEnviron = true } = {}) {
         // Let the next request retry rather than wedging the isolate, unless a
         // later request has already started a new boot.
         if (booted === pending) booted = null;
-        return new Response(`wasm boot failed: ${err?.stack ?? err}\n`, {
+        const detail = `wasm boot failed: ${err?.stack ?? err}\n`;
+        const rayLine = `ray: ${rayId(request)}\n`;
+        console.error(detail + rayLine);
+        return new Response(exposeErrors ? detail + rayLine : `Internal Server Error\n${rayLine}`, {
           status: 500,
           headers: { "content-type": "text/plain; charset=utf-8" },
         });
