@@ -13,6 +13,9 @@ module Cloudflare.Workers.Fetch.Internal
   , noBody
   , bodyBytes
   , bodyText
+  , bytes
+  , text
+  , BodyAlreadyUsed (..)
     -- * Responses
   , Response (..)
   , response
@@ -27,9 +30,12 @@ module Cloudflare.Workers.Fetch.Internal
   , bodyToJS
   ) where
 
+import           Control.Exception               (Exception, throwIO)
+import           Control.Monad                   (when)
 import qualified Data.ByteString                 as B
 import           Data.Text                       (Text)
 import qualified Data.Text.Encoding              as TE
+import qualified Data.Text.Encoding.Error        as TEE
 import           Network.HTTP.Types              (Method, RequestHeaders,
                                                   ResponseHeaders)
 
@@ -84,6 +90,29 @@ bodyBytes = BytesBody
 -- | UTF-8 encoded.
 bodyText :: Text -> Body
 bodyText = BytesBody . TE.encodeUtf8
+
+-- | Thrown when a JavaScript body is read, or forwarded, a second time.
+data BodyAlreadyUsed = BodyAlreadyUsed
+  deriving (Show)
+
+instance Exception BodyAlreadyUsed
+
+-- | The whole body. A JavaScript body can be read once; bytes built in
+-- Haskell any number of times.
+bytes :: Body -> IO B.ByteString
+bytes (BytesBody b) = pure b
+bytes (JSBody owner) = do
+  ensureUnused owner
+  awaitJS (js_readBytes owner) >>= fromJSBytes
+
+-- | The body decoded as UTF-8, replacing invalid sequences as @text()@ does.
+text :: Body -> IO Text
+text b = TE.decodeUtf8With TEE.lenientDecode <$> bytes b
+
+ensureUnused :: JSVal -> IO ()
+ensureUnused owner = do
+  used <- js_bodyUsed owner
+  when used (throwIO BodyAlreadyUsed)
 
 -- ---------------------------------------------------------------------------
 -- Responses
@@ -166,7 +195,7 @@ fromJSResponse v = do
 
 toJSResponse :: Response -> IO JSVal
 toJSResponse r = case rOriginal r of
-  Just v -> pure v
+  Just v -> ensureUnused v >> pure v
   Nothing -> do
     hs <- headerPairs (rHeaders r)
     b <- if hasNullBody (rStatus r) then jsNull else bodyToJS (rBody r)
@@ -184,7 +213,7 @@ bodyToJS :: Body -> IO JSVal
 bodyToJS (BytesBody b)
   | B.null b = jsNull
   | otherwise = toJSBytes b
-bodyToJS (JSBody owner) = js_bodyOf owner
+bodyToJS (JSBody owner) = ensureUnused owner >> js_bodyOf owner
 
 -- ---------------------------------------------------------------------------
 -- Imports
@@ -214,3 +243,9 @@ foreign import javascript unsafe "$1.body"
 -- | safe: throws RangeError on a bad status and TypeError on a bad header.
 foreign import javascript safe "new Response($1, { status: $2, statusText: $3, headers: $4 })"
   js_mkResponse :: JSVal -> Int -> JSString -> JSVal -> IO JSVal
+
+foreign import javascript unsafe "$1.bodyUsed"
+  js_bodyUsed :: JSVal -> IO Bool
+
+foreign import javascript safe "return new Uint8Array(await $1.arrayBuffer());"
+  js_readBytes :: JSVal -> IO JSVal

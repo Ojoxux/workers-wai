@@ -8,6 +8,7 @@ import           Cloudflare.Workers.Context (Context)
 import           Cloudflare.Workers.Entry   (runWorker)
 import           Cloudflare.Workers.Env     (Env)
 import qualified Cloudflare.Workers.Fetch   as F
+import qualified Data.ByteString            as B
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
 import           Text.Read                  (readMaybe)
@@ -23,6 +24,11 @@ route _env req _ctx =
     ["hello"] -> pure (ok "hello")
     ["status", code]
       | Just n <- readMaybe (T.unpack code) -> pure (F.response n [] (F.bodyText "x"))
+    ["body", "echo"] -> F.response 200 [] . F.bodyBytes <$> F.bytes (F.body req)
+    ["body", "text"] -> ok <$> F.text (F.body req)
+    ["body", "twice"] -> do
+      _ <- F.bytes (F.body req)
+      ok . T.pack . show . B.length <$> F.bytes (F.body req)
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 
 ok :: Text -> F.Response

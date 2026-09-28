@@ -15,6 +15,9 @@ module Cloudflare.Workers.Fetch
   , noBody
   , bodyBytes
   , bodyText
+  , bytes
+  , text
+  , BodyAlreadyUsed (..)
     -- * Responses
   , Response
   , response
