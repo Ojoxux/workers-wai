@@ -2,6 +2,7 @@ dist-newstyle/
 worker/generated/
 worker/node_modules/
 worker/.wrangler/
+.wrangler/
 node_modules/
 result
 .direnv/

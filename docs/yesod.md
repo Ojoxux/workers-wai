@@ -9,7 +9,7 @@ that was the point of the exercise. What follows is what it took to get
 Only the `foreign export` line distinguishes this from a `warp`-hosted Yesod app:
 
 ```haskell
-foreign export javascript "waiMain" main :: IO ()
+foreign export javascript "workerMain" main :: IO ()
 
 main :: IO ()
 main = do

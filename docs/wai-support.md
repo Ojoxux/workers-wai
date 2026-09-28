@@ -1,6 +1,6 @@
 # Supported WAI features
 
-Everything below is verified end to end, by `scripts/smoke.mjs` and by `curl`
+Everything below is verified end to end, by `scripts/test.sh` and by `curl`
 against `wrangler dev`.
 
 This is a proof of concept and deliberately implements a small subset. Where a
@@ -19,11 +19,15 @@ pretending.
 | `isSecure` | `protocol === 'https:'` |
 | `remoteHost` | recovered from `CF-Connecting-IP` when it parses as IPv4 |
 | `httpVersion` | always `HTTP/1.1` — Workers does not expose the real version |
-| `vault` | always empty |
+| `vault` | holds the request's `Context`; read it with `requestContext` |
 
 `remoteHost` has to be a `SockAddr`, which Workers has no direct equivalent for.
 An IPv6 `CF-Connecting-IP` — which is what `wrangler dev` sends for `::1` — falls
 back to the `0.0.0.0:0` placeholder. The port is always 0.
+
+`rawPathInfo` and `rawQueryString` come from the request URL with its fragment,
+if any, dropped first — `#frag` is never sent to a server, but `request.url` can
+carry one for service-binding, self-fetch and test requests.
 
 ## Response
 
@@ -33,10 +37,26 @@ back to the `0.0.0.0:0` placeholder. The port is always 0.
 | `responseStream` (`ResponseStream`) | **buffered**: the body is accumulated in full before the `Response` is constructed |
 
 Status codes and response headers pass through. `101`, `204`, `205` and `304` get
-a `null` body, because `new Response(body, ...)` rejects a body for those.
+a `null` body, because `new Response(body, ...)` rejects a body for those. A
+header name or value containing NUL is rejected with a `500` rather than being
+split into extra headers.
 
 Uncaught exceptions in the `Application` become a `500` carrying the exception
 text, and are also written to `console.error`.
+
+## Env and ExecutionContext
+
+`runCloudflareWith` passes the Worker's env to the code that builds the
+`Application`, once per isolate:
+
+```haskell
+main = runCloudflareWith $ \env -> do
+  key <- Env.var env "SESSION_KEY"
+  toWaiAppPlain (App key)
+```
+
+String entries are also in the process environment, so `lookupEnv` works.
+Inside a handler, `requestContext req` returns the `Context` for `waitUntil`.
 
 ## Not supported
 

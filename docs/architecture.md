@@ -5,41 +5,45 @@ module**. A reactor module, unlike a command module, has no entry point of its
 own and stays alive between calls — exactly the shape a Worker needs.
 
 ```
-worker/src/index.mjs           Workers fetch handler (JavaScript)
-  |  instantiates once per isolate
+worker/src/index.mjs           Workers entry: makeWorker(wasm, jsffi)
+worker/src/runtime.mjs         makeWorker: boot once per isolate, forward fetch
   +-- worker/src/wasi.mjs      minimal wasi_snapshot_preview1 shim
   +-- generated/ghc_wasm_jsffi.js   JSFFI glue, emitted by post-link.mjs
   +-- generated/app.wasm       the Haskell program
         |
-        |  exports: waiMain, handleRequest
+        |  exports: setEnv, workerMain, handleRequest
         v
-haskell/wai-handler-cloudflare
-  Network.Wai.Handler.Cloudflare
-    runCloudflare      :: Application -> IO ()   -- register
-    handleRequest      :: JSVal -> IO JSVal      -- exported to JavaScript
-    fromWorkerRequest  :: JSVal -> IO Request
-    toWorkerResponse   :: Response -> IO JSVal
+haskell/cloudflare-workers     typed Workers bindings
+  Cloudflare.Workers.Entry     runWorker :: (Env -> IO Handler) -> IO ()
+  Cloudflare.Workers.Fetch     Request / Body / Response, fetch
+  Cloudflare.Workers.Env       var, lookupVar
+  Cloudflare.Workers.Context   waitUntil
         |
         v
-haskell/demo-wai               a bare WAI Application
-haskell/demo-yesod             a minimal Yesod application
+haskell/wai-handler-cloudflare runCloudflareWith :: (Env -> IO Application) -> IO ()
+        |
+        v
+haskell/demo-wai, demo-yesod   WAI / Yesod applications
+haskell/test-worker            one route per cloudflare-workers behaviour
 haskell/shims/*                stand-ins for packages that lack a wasm build
 ```
 
 ## Request lifecycle
 
-1. **First request in an isolate** — `index.mjs` instantiates the wasm module.
-   The `ghc_wasm_jsffi` import object needs to reach the instance's exports,
-   which do not exist yet, so GHC's documented knot-tying trick is used: pass an
-   empty object, then `Object.assign` the exports into it afterwards.
-2. `wasi.initialize(instance)` calls the module's `_initialize` export exactly
-   once, which runs the wasm constructors and brings up the Haskell RTS.
-3. `await instance.exports.waiMain()` runs the application's `main`, which calls
-   `runCloudflare app`. That stores the `Application` and returns immediately —
-   there is no accept loop to enter.
-4. **Every request** — `instance.exports.handleRequest(request)` is called with
-   the JavaScript `Request`. JSFFI exports are asynchronous by default, so this
-   returns a `Promise<Response>`, which is exactly what `fetch` may return.
+1. **First request in an isolate** — `makeWorker` copies the string entries
+   of `env` into the WASI environ (unless `envAsEnviron: false`), then
+   instantiates the module, tying the JSFFI knot: an empty object is passed
+   as the exports table and filled in afterwards.
+2. `wasi.initialize(instance)` calls `_initialize` once: wasm constructors and
+   the Haskell RTS.
+3. `setEnv(env)` hands the env object to `Cloudflare.Workers.Entry`.
+4. `workerMain()` runs the application's `main`, which calls `runWorker` (or
+   `runCloudflareWith`). That builds the handler from the env, stores it, and
+   returns.
+5. **Every request** — `handleRequest(request, ctx)` converts the JS
+   `Request`, runs the handler, and converts the result. JSFFI exports are
+   asynchronous, so JavaScript receives a `Promise<Response>`. An exception
+   becomes a 500 and is written to `console.error`.
 
 Instantiation is deferred to the first request rather than done at module scope,
 so it is billed as request time instead of counting against the much tighter
@@ -65,12 +69,12 @@ A reactor module cannot run `main` by itself, so the application module exports
 it explicitly — the one wasm-specific line an application needs:
 
 ```haskell
-foreign export javascript "waiMain" main :: IO ()
+foreign export javascript "workerMain" main :: IO ()
 ```
 
-The registered `Application` lives in an `IORef` inside the Haskell heap. Nothing
-is written to `globalThis`, and the JavaScript side only ever touches the wasm
-instance's own exports.
+The handler lives in an `IORef` inside `Cloudflare.Workers.Entry`, next to the
+env. `setEnv` and `handleRequest` are exported by the library, so the
+application still writes exactly one `foreign export`.
 
 WAI's continuation-passing shape — `Application = Request -> (Response -> IO
 ResponseReceived) -> IO ResponseReceived` — cannot be observed from JavaScript,
