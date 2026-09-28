@@ -19,14 +19,15 @@ newtype Env = Env JSVal
 -- | The per-request @ExecutionContext@.
 newtype Context = Context JSVal
 
--- | The env entry with this name, or 'Nothing' when it is absent.
+-- | The env entry with this name, or 'Nothing' when it is absent. Only sees
+-- the env's own entries, not ones inherited from its prototype chain.
 lookupBinding :: Env -> Text -> IO (Maybe JSVal)
 lookupBinding (Env env) name = do
   v <- js_get env (textToJS name)
   undef <- js_isUndefined v
   pure (if undef then Nothing else Just v)
 
-foreign import javascript unsafe "$1[$2]"
+foreign import javascript unsafe "Object.hasOwn($1, $2) ? $1[$2] : undefined"
   js_get :: JSVal -> JSString -> IO JSVal
 
 foreign import javascript unsafe "$1 === undefined"

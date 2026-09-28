@@ -43,3 +43,8 @@ test("envAsEnviron: false keeps env out of the environ", async () => {
   assert.equal((await get(isolated, "/env/environ/GREETING")).text, "Nothing");
   assert.equal((await get(isolated, "/env/var/GREETING")).text, "hi");
 });
+
+test("lookupVar ignores inherited properties", async () => {
+  assert.deepEqual(await get(worker, "/env/lookup/toString"), { status: 200, text: "Nothing" });
+  assert.deepEqual(await get(worker, "/env/lookup/constructor"), { status: 200, text: "Nothing" });
+});
