@@ -8,7 +8,8 @@
 --                  streaming-commons, http-semantics, http2, warp, wai-extra.
 --   entropy        real: backed by the host's crypto.getRandomValues.
 --   memory         real: constEq reimplemented as constant-time comparison.
---   clientsession  fictional: no AES/Skein. Sessions must be disabled.
+--   clientsession  fictional: no AES/Skein. Applications use
+--                   Yesod.Cloudflare.Session (yesod-cloudflare) instead.
 packages:
   haskell/cloudflare-workers
   haskell/yesod-cloudflare

@@ -6,6 +6,9 @@
 -- ‖ ( key length (Word32 BE) ‖ key (UTF-8) ‖ value length (Word32 BE) ‖ value ) × count
 -- @
 --
+-- The module is public so the format is documented and testable, but it is not
+-- a stable API.
+--
 -- Decoding is total: malformed input gives 'Nothing', never an exception.
 -- Lengths and the entry count are compared as 'Integer', never narrowed to
 -- 'Int' first: on wasm32 'Int' is 32 bits, and a length of 2^31 or more

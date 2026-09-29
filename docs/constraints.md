@@ -77,11 +77,15 @@ has been found.
 
 ## Two `wrangler dev` instances collide unless separated
 
-Started side by side with defaults, the second instance fails on two shared
-resources:
+Both configs live in `test/`, so with defaults the two instances share the
+inspector port 9229 and the local state at `test/.wrangler/state`. Which one
+fails is a race, and either can:
 
-- Both bind the inspector to port 9229: `Address already in use`.
-- Both open the same local SQLite state: `SQLITE_BUSY ... database is locked`.
+- The second to bind the inspector fails with
+  `Address already in use (127.0.0.1:9229)` (observed on the yesod instance).
+- Both open the same local SQLite state, and one dies with
+  `SQLITE_BUSY_RECOVERY ... database is locked` (observed on the test-worker
+  instance).
 
 `scripts/check-wrangler.mjs` gives each instance its own free inspector port and
 its own `--persist-to` directory under `.wrangler/state/`.

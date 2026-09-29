@@ -2,6 +2,6 @@ name = "yesod-cloudflare-test"
 main = "yesod-worker.mjs"
 compatibility_date = "2026-09-01"
 
-# Must match SESSION_KEY in scripts/check-wrangler.mjs.
+# A fixed test key for local dev only; any value of at least 32 bytes works.
 [vars]
 SESSION_KEY = "test-session-key-current-0123456789abcdef"

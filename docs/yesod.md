@@ -103,6 +103,24 @@ Shorter keys are rejected with `SessionKeyTooShort`. IVs are random 96-bit
 values, so rotate a key well before it has written 2^32 sessions; that only
 matters at very high traffic.
 
+**One key per app.** The HKDF salt and info are fixed, so two apps sharing a key
+accept each other's cookies. Give every app its own.
+
+**Production.** For login state, wrap the backend so the cookie is `Secure` and
+`SameSite=Lax`. Both wrappers take and return `IO (Maybe SessionBackend)`:
+
+```haskell
+instance Yesod App where
+  makeSessionBackend =
+    laxSameSiteSessions . sslOnlySessions . pure . Just . appSessionBackend
+```
+
+**Revocation.** Logging out or `clearSession` only empties the session the
+browser sends next; it does not invalidate a cookie someone has already copied,
+and because the timeout slides, a thief who keeps using the cookie keeps it
+alive. Rotating the key, and later dropping the old one from `oldKeys`, is the
+only global revocation.
+
 **Rotating the key.** Put the new Secret in `currentKey` and the previous one in
 `oldKeys`. Sessions under the old key are still read and are rewritten under the
 new one on their next request; drop the old key once the idle timeout has

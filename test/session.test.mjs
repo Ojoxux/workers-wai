@@ -169,6 +169,20 @@ test("a key shorter than 32 bytes stops the worker from booting", async () => {
   }
 });
 
+test("a key in oldKeys shorter than 32 bytes stops the worker from booting", async () => {
+  const short = await loadWorker("test-yesod", { exposeErrors: true });
+  const logged = [];
+  const original = console.error;
+  console.error = (...a) => logged.push(a.join(" "));
+  try {
+    const res = await short.fetch(new Request(`${BASE}/count`), { SESSION_KEY: CURRENT, SESSION_KEY_OLD: "short" }, fakeCtx().ctx);
+    assert.equal(res.status, 500);
+    assert.match((await res.text()) + logged.join("\n"), /at least 32 bytes|SessionKeyTooShort/);
+  } finally {
+    console.error = original;
+  }
+});
+
 test("a timeout under one minute stops the worker from booting", async () => {
   const zero = await loadWorker("test-yesod", { exposeErrors: true });
   const logged = [];

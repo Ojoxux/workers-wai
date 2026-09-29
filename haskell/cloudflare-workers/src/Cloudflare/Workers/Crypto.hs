@@ -25,7 +25,8 @@ import           Cloudflare.Workers.Internal.FFI
 newtype AesGcmKey = AesGcmKey JSVal
 
 -- | Cryptographically secure random bytes from @crypto.getRandomValues@.
--- Requests above its 65,536-byte limit are filled in chunks.
+-- Requests above its 65,536-byte limit are filled in chunks. A negative
+-- length throws an 'IOError'.
 randomBytes :: Int -> IO B.ByteString
 randomBytes n
   | n < 0 = ioError (userError ("Cloudflare.Workers.Crypto.randomBytes: negative length " <> show n))
@@ -47,7 +48,8 @@ hkdfAesGcmKey ikm salt info = do
   info' <- toJSBytes info
   AesGcmKey <$> awaitJS (js_hkdfAesGcmKey ikm' salt' info')
 
--- | Ciphertext followed by the 16-byte authentication tag.
+-- | Ciphertext followed by the 16-byte authentication tag. An empty IV throws
+-- an 'IOError'; sessions use 12-byte IVs.
 aesGcmEncrypt :: AesGcmKey -> B.ByteString -> B.ByteString -> B.ByteString -> IO B.ByteString
 aesGcmEncrypt (AesGcmKey key) iv aad plaintext = do
   requireIv iv
@@ -58,7 +60,8 @@ aesGcmEncrypt (AesGcmKey key) iv aad plaintext = do
 
 -- | 'Nothing' when the data does not authenticate under this key/IV/AAD —
 -- wrong key, wrong AAD, tampered data, or a ciphertext shorter than the
--- tag; other failures are thrown.
+-- tag; other failures are thrown, including an 'IOError' for an empty IV.
+-- Sessions use 12-byte IVs.
 aesGcmDecrypt :: AesGcmKey -> B.ByteString -> B.ByteString -> B.ByteString -> IO (Maybe B.ByteString)
 aesGcmDecrypt (AesGcmKey key) iv aad ciphertext = do
   requireIv iv

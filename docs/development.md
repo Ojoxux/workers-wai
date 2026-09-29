@@ -27,7 +27,7 @@ scripts/test.sh
 ```
 
 Builds `test-worker`, `test-yesod`, `demo-wai` and `demo-yesod` into
-`.test-build/`, then runs `test/*.test.mjs` (74 tests) with Node's test runner. Each test boots a module
+`.test-build/`, then runs `test/*.test.mjs` with Node's test runner. Each test boots a module
 through `worker/src/runtime.mjs` — the same code path as production — with a
 fake `ExecutionContext` and, for outbound fetch, a local HTTP server.
 
@@ -44,7 +44,7 @@ node scripts/check-wrangler.mjs
 ```
 
 It needs builds of `test-worker` and `test-yesod` in `.test-build/` (`scripts/test.sh` makes
-one). The script starts the upstream server from `test/harness.mjs`, runs
+them). The script starts the upstream server from `test/harness.mjs`, runs
 `wrangler dev -c test/wrangler.toml` on a free port with `UPSTREAM` pointing at
 it, waits for `/hello`, and then runs the shared cases in `test/cases.mjs` plus
 workerd-only checks that need the upstream: outbound fetch, Set-Cookie
