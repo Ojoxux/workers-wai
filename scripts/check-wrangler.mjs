@@ -6,8 +6,9 @@
 //   node scripts/check-wrangler.mjs
 //   SHOW_WRANGLER_LOG=1 node scripts/check-wrangler.mjs   # print the log even on success
 //
-// Requires builds of test-worker and test-yesod in .test-build/ first: scripts/test.sh, or
-// scripts/build.sh test-worker .test-build/test-worker.
+// Requires builds of test-worker and test-yesod in .test-build/ first: run scripts/test.sh, or
+// scripts/build.sh test-worker .test-build/test-worker and
+// scripts/build.sh test-yesod .test-build/test-yesod.
 //
 // The script starts the upstream from test/harness.mjs and both wranglers itself,
 // and always stops them on exit, failure or Ctrl-C.
@@ -48,7 +49,7 @@ function startWrangler(config, extraArgs, readyPath) {
     instance.proc = spawn(
       join(root, "worker/node_modules/.bin/wrangler"),
       ["dev", "-c", config, "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort),
-       // own state dir: instances sharing one dev registry lock each other out
+       // own state dir: instances sharing the local SQLite persist state lock each other out (SQLITE_BUSY)
        "--persist-to", join(root, ".wrangler", "state", basename(config, ".toml")), ...extraArgs],
       {
         cwd: root,

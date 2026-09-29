@@ -75,6 +75,21 @@ under `wrangler dev` with no extra configuration, and every check that passes
 under Node also passes there. No behaviour difference between Node and workerd
 has been found.
 
+## Two `wrangler dev` instances collide unless separated
+
+Both configs live in `test/`, so with defaults the two instances share the
+inspector port 9229 and the local state at `test/.wrangler/state`. Which one
+fails is a race, and either can:
+
+- The second to bind the inspector fails with
+  `Address already in use (127.0.0.1:9229)` (observed on the yesod instance).
+- Both open the same local SQLite state, and one dies with
+  `SQLITE_BUSY_RECOVERY ... database is locked` (observed on the test-worker
+  instance).
+
+`scripts/check-wrangler.mjs` gives each instance its own free inspector port and
+its own `--persist-to` directory under `.wrangler/state/`.
+
 ## A `safe` import's result is a lazy thunk
 
 The effect is not awaited, and a rejection is not raised, until the result is

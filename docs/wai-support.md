@@ -72,7 +72,6 @@ environment unless `envAsEnviron: false` is passed to `makeWorker`, so
 | Streaming request bodies | the body is read in full before the `Application` runs |
 | Trailers, HTTP/2 details, `Expect: 100-continue` | not represented |
 | `HEAD` | not special-cased; the runtime drops the body |
-| **Yesod sessions** | the `clientsession` shim has no cryptography — see [shims.md](shims.md) |
 | Yesod file uploads, gzip middleware | link, but rest on shimmed code paths; untested |
 | Persistent / PostgreSQL, D1 / KV / R2, Durable Objects, Cron / Queues | out of scope for this PoC |
 

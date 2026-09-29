@@ -63,8 +63,10 @@ The limit is 64 MiB uncompressed, so size is not a constraint. Getting Yesod to
 
 ```
 haskell/wai-handler-cloudflare   the handler: Network.Wai.Handler.Cloudflare
+haskell/yesod-cloudflare         Yesod integrations: WebCrypto session backend
 haskell/cloudflare-workers       typed Workers bindings: Fetch, Env, Context, runWorker
 haskell/test-worker              a Worker that exercises cloudflare-workers, for the tests
+haskell/test-yesod               a Yesod app that exercises the session backend, for the tests
 haskell/demo-wai                 a bare WAI Application
 haskell/demo-yesod               a minimal Yesod application
 haskell/shims/                   stand-ins for packages with no wasm build

@@ -15,7 +15,7 @@ dependency bounds resolve normally.
 | `network` | wasi-libc ships `sys/socket.h` but no `netdb.h`, so `HsNet.h` fails on undeclared `getaddrinfo` / `getnameinfo` / `freeaddrinfo` | **Partial.** Address types are real, because WAI genuinely uses `SockAddr`. Socket operations raise a descriptive error. |
 | `entropy` | its custom `Setup.hs` link-tests against `-lHSrts-1.0.3_thr`; there is no threaded RTS for wasm | **Real.** Backed by the host's `crypto.getRandomValues` through JSFFI, which is a CSPRNG. |
 | `memory` | depends on `basement`, whose `cbits/foundation_system.h` dispatches on `_WIN32` / `__APPLE__` / `__linux__` / `__unix__` and errors on anything else; wasi-sdk's clang defines `__wasi__`, which it has never heard of | **Real.** `yesod-core` uses exactly one function, `constEq`, reimplemented as a genuine constant-time comparison. |
-| `clientsession` | needs AES and Skein via `crypton` → `memory` → `basement` | **Fictional.** Every operation raises an error. |
+| `clientsession` | needs AES and Skein via `crypton` → `memory` → `basement` | **Fictional.** Every operation raises an error. Applications use `Yesod.Cloudflare.Session` instead. |
 
 ## `network` is the load-bearing one
 
@@ -58,23 +58,16 @@ available on this platform, just not through the path the real package takes.
 
 ## `clientsession` is the one real fiction
 
-It provides no cryptography. An application built against it **must disable
-sessions**:
+It provides no cryptography, and every operation raises an error. Applications
+do not use it: they use `Yesod.Cloudflare.Session` from `yesod-cloudflare`, a
+session backend on WebCrypto AES-GCM (see [yesod.md](yesod.md)). The shim remains
+only because `yesod-core` depends on `clientsession` at build time. An
+application that used `defaultClientSessionBackend` would fail at runtime with an
+error explaining the situation, rather than at compile time.
 
-```haskell
-instance Yesod App where
-  makeSessionBackend _ = pure Nothing
-```
-
-Anything else fails at runtime with an error explaining the situation, rather
-than at compile time. That is the cost of this approach, and the reason sessions
-appear under "not supported".
-
-Making sessions work would mean either porting `basement` to WASI, or
-reimplementing `Web.ClientSession` against the Workers runtime's WebCrypto
-`SubtleCrypto` API through JSFFI. The latter is the more promising direction: the
-platform has AES-GCM and HMAC natively, so a Workers-native session backend would
-be both real and probably faster than the original.
+Porting `basement` to WASI would be the other way to make the real package
+build, but the Workers runtime has AES-GCM natively, so the WebCrypto backend is
+both real and simpler.
 
 ## One flag, not a shim
 
