@@ -5,16 +5,20 @@
 module Main (main) where
 
 import           Cloudflare.Workers.Context (Context, waitUntil)
+import qualified Cloudflare.Workers.Crypto  as Crypto
 import           Cloudflare.Workers.Entry   (runWorker)
 import           Cloudflare.Workers.Env     (Env)
 import qualified Cloudflare.Workers.Env     as Env
 import qualified Cloudflare.Workers.Fetch   as F
 import           Control.Monad              (void)
+import           Data.Bits                  (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
 import           Data.CaseInsensitive       (original)
+import           Data.Char                  (ord)
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
+import           Network.HTTP.Types         (parseQuery)
 import           System.Environment         (lookupEnv)
 import           Text.Read                  (readMaybe)
 
@@ -88,6 +92,33 @@ route env req ctx =
     ["headers", "echo"] -> do
       let line (n, v) = T.pack (BC.unpack (original n)) <> ": " <> T.pack (BC.unpack v)
       pure (ok (T.intercalate "\n" (map line (F.headers req))))
+    ["crypto", "seal"]
+      | Just [ikm, salt, info, iv, aad, pt] <- params req ["ikm", "salt", "info", "iv", "aad", "pt"] -> do
+          key <- Crypto.hkdfAesGcmKey ikm salt info
+          ok . toHex <$> Crypto.aesGcmEncrypt key iv aad pt
+    ["crypto", "open"]
+      | Just [ikm, salt, info, iv, aad, ct] <- params req ["ikm", "salt", "info", "iv", "aad", "ct"] -> do
+          key <- Crypto.hkdfAesGcmKey ikm salt info
+          ok . maybe "Nothing" toHex <$> Crypto.aesGcmDecrypt key iv aad ct
+    ["crypto", "random", n]
+      | Just len <- readMaybe (T.unpack n) -> do
+          b <- Crypto.randomBytes len
+          pure (ok (T.pack (show (B.length b) <> " " <> show (B.any (/= 0) b))))
+    ["crypto", "random-hex", n]
+      | Just len <- readMaybe (T.unpack n) -> ok . toHex <$> Crypto.randomBytes len
+    ["crypto", "selftest"] -> do
+      key <- Crypto.hkdfAesGcmKey (BC.replicate 32 'k') "salt" "info"
+      other <- Crypto.hkdfAesGcmKey (BC.replicate 32 'o') "salt" "info"
+      iv <- Crypto.randomBytes 12
+      ct <- Crypto.aesGcmEncrypt key iv "aad" "payload"
+      back <- Crypto.aesGcmDecrypt key iv "aad" ct
+      wrongKey <- Crypto.aesGcmDecrypt other iv "aad" ct
+      wrongAad <- Crypto.aesGcmDecrypt key iv "other" ct
+      tampered <- Crypto.aesGcmDecrypt key iv "aad" (B.map (+ 1) ct)
+      pure . ok $
+        if back == Just "payload" && wrongKey == Nothing && wrongAad == Nothing && tampered == Nothing
+          then "ok"
+          else T.pack (show (back, wrongKey, wrongAad, tampered))
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 
 ok :: Text -> F.Response
@@ -99,3 +130,29 @@ segments u =
   let afterScheme = T.drop 3 (snd (T.breakOn "://" u))
       path = T.takeWhile (/= '?') (T.dropWhile (/= '/') afterScheme)
    in filter (not . T.null) (T.splitOn "/" path)
+
+-- | Hex-decoded query parameters, in the order asked for; Nothing if any is
+-- missing or not valid hex.
+params :: F.Request -> [B.ByteString] -> Maybe [B.ByteString]
+params req names =
+  let query = parseQuery (BC.pack (T.unpack (T.dropWhile (/= '?') (F.url req))))
+   in traverse (\n -> lookup n query >>= id >>= fromHex) names
+
+toHex :: B.ByteString -> Text
+toHex = T.pack . concatMap byte . B.unpack
+  where
+    byte w = [digit (w `shiftR` 4), digit (w .&. 15)]
+    digit d = "0123456789abcdef" !! fromIntegral d
+
+fromHex :: B.ByteString -> Maybe B.ByteString
+fromHex s
+  | odd (B.length s) = Nothing
+  | otherwise = B.pack <$> traverse pair (chunks (BC.unpack s))
+  where
+    chunks (a : b : rest) = (a, b) : chunks rest
+    chunks _ = []
+    pair (a, b) = (\x y -> fromIntegral ((x `shiftL` 4) .|. y)) <$> nibble a <*> nibble b
+    nibble c
+      | c >= '0' && c <= '9' = Just (ord c - ord '0')
+      | c >= 'a' && c <= 'f' = Just (ord c - ord 'a' + 10)
+      | otherwise = Nothing
