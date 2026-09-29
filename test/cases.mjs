@@ -14,6 +14,8 @@ export const cases = [
   { name: "body read twice", method: "POST", path: "/body/twice", requestBody: "x", status: 500, includes: "body already used" },
   { name: "bad url", path: "/fetch/badurl", status: 500, includes: "TypeError" },
   { name: "invalid status", path: "/status/99", status: 500, includes: "RangeError" },
+  { name: "crypto self-test", path: "/crypto/selftest", status: 200, body: "ok" },
+  { name: "crypto random", path: "/crypto/random/100000", status: 200, body: "100000 True True" },
 ];
 
 /** Returns a list of problems; empty means the case passed. */
