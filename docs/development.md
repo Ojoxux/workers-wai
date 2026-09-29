@@ -26,8 +26,8 @@ fine and then fails with `instance.exports.workerMain is not a function`.
 scripts/test.sh
 ```
 
-Builds `test-worker`, `demo-wai` and `demo-yesod` into `.test-build/`, then
-runs `test/*.test.mjs` with Node's test runner. Each test boots a module
+Builds `test-worker`, `test-yesod`, `demo-wai` and `demo-yesod` into
+`.test-build/`, then runs `test/*.test.mjs` (74 tests) with Node's test runner. Each test boots a module
 through `worker/src/runtime.mjs` — the same code path as production — with a
 fake `ExecutionContext` and, for outbound fetch, a local HTTP server.
 
@@ -36,13 +36,14 @@ After the first build, `node --test --test-force-exit --test-timeout=30000
 once a test has loaded `demo-yesod`, whose background threads keep a JS timer
 alive (see [constraints.md](constraints.md)).
 
-Node is not workerd. To check `test-worker` against the real runtime:
+Node is not workerd. To check `test-worker` and `test-yesod` against the real
+runtime:
 
 ```sh
 node scripts/check-wrangler.mjs
 ```
 
-It needs a build of `test-worker` in `.test-build/` (`scripts/test.sh` makes
+It needs builds of `test-worker` and `test-yesod` in `.test-build/` (`scripts/test.sh` makes
 one). The script starts the upstream server from `test/harness.mjs`, runs
 `wrangler dev -c test/wrangler.toml` on a free port with `UPSTREAM` pointing at
 it, waits for `/hello`, and then runs the shared cases in `test/cases.mjs` plus
@@ -51,6 +52,12 @@ passthrough, and `waitUntil` work continuing after the response. wrangler and
 the upstream are stopped on exit, failure or Ctrl-C. `SHOW_WRANGLER_LOG=1`
 prints wrangler's log even when everything passes (it is always printed on
 failure).
+
+It also starts a second instance, `wrangler dev -c test/yesod-wrangler.toml`,
+and runs two session and CSRF checks against it. Each instance gets its own free
+inspector port and its own `--persist-to` state directory under
+`.wrangler/state/`, because two instances otherwise collide (see
+[constraints.md](constraints.md)).
 
 ## The build script
 

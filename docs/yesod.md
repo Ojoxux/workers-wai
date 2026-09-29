@@ -61,12 +61,55 @@ wasm32-wasi-cabal build exe:demo-yesod --dry-run
 That is how `crypton-x509` was traced back to `warp`'s `x509` flag rather than to
 anything Yesod actually wanted.
 
-**4. Disable sessions**, because the `clientsession` shim has no cryptography:
+**4. Use the Workers session backend.** The `clientsession` shim has no
+cryptography, so `defaultClientSessionBackend` cannot work. `yesod-cloudflare`
+provides a backend on WebCrypto AES-256-GCM instead:
 
 ```haskell
+import Yesod.Cloudflare.Session
+
+main = runCloudflareWith $ \env -> do
+  key <- Env.var env "SESSION_KEY"            -- a Secret, at least 32 bytes
+  backend <- cloudflareSessionBackend (SessionKeys key []) 120
+  toWaiAppPlain (App backend)
+
 instance Yesod App where
-  makeSessionBackend _ = pure Nothing
+  makeSessionBackend = pure . Just . appSessionBackend
 ```
+
+It behaves like `clientSessionBackend`: an encrypted `_SESSION` cookie
+(`HttpOnly; Path=/; Expires`), an idle timeout in minutes that restarts on every
+request, and an empty session for any cookie it cannot read. `sslOnlySessions`,
+`laxSameSiteSessions` and friends compose with it as usual, and so do
+`defaultCsrfMiddleware` and yesod-auth, which only need a working session.
+
+Differences from `clientSessionBackend`:
+
+- The current time is read per request instead of from a background cache
+  thread.
+- A session whose encoded cookie exceeds 4,000 bytes throws `SessionTooLarge`
+  instead of producing a cookie the browser silently drops.
+- A timeout below 1 minute is rejected when the backend is built.
+
+If a request carries several `_SESSION` cookies (say one per Path or Domain),
+the session is used only when exactly one of them opens, that is, authenticates
+under some key and has not expired; otherwise it is empty. yesod-core's
+`clientSessionBackend` applies the same rule.
+
+**Keys.** A key is a random secret of at least 32 bytes, for example the output
+of `openssl rand -base64 32`, stored as a Secret. It is not a passphrase: keys go
+through HKDF, which is not a password hash and does nothing to slow guessing.
+Shorter keys are rejected with `SessionKeyTooShort`. IVs are random 96-bit
+values, so rotate a key well before it has written 2^32 sessions; that only
+matters at very high traffic.
+
+**Rotating the key.** Put the new Secret in `currentKey` and the previous one in
+`oldKeys`. Sessions under the old key are still read and are rewritten under the
+new one on their next request; drop the old key once the idle timeout has
+passed.
+
+The cookie format is documented in `Yesod.Cloudflare.Session.Codec` and
+reimplemented, for the tests, in `test/session-cookie.mjs`.
 
 **5. Re-check the WASI imports.** The Yesod build needs one more than the WAI
 build:
@@ -101,9 +144,6 @@ Cold start 27 ms, warm requests 2–3 ms, `app.wasm` 4.1 MiB.
 
 ## What does not
 
-Sessions, and anything downstream of them — see
-[wai-support.md](wai-support.md) for the full list. File uploads and the gzip
-middleware link but rest on shimmed code paths and are untested.
-
-The obvious next step is a Workers-native session backend built on WebCrypto,
-which would remove the only genuinely fictional shim.
+Sessions, CSRF and anything built on them work with `Yesod.Cloudflare.Session`.
+See [wai-support.md](wai-support.md) for what is still unsupported. File uploads
+and the gzip middleware link but rest on shimmed code paths and are untested.
