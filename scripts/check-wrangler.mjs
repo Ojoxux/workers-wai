@@ -1,22 +1,24 @@
 // Run test-worker under `wrangler dev` (workerd) and check it over HTTP:
 // the shared table in test/cases.mjs, plus workerd-only checks that need an
-// upstream server (outbound fetch, Set-Cookie passthrough, waitUntil).
+// upstream server (outbound fetch, Set-Cookie passthrough, waitUntil). It also
+// starts test/yesod-wrangler.toml (test-yesod) and checks sessions and CSRF.
 //
 //   node scripts/check-wrangler.mjs
 //   SHOW_WRANGLER_LOG=1 node scripts/check-wrangler.mjs   # print the log even on success
 //
-// Requires a build of test-worker in .test-build/ first: scripts/test.sh, or
+// Requires builds of test-worker and test-yesod in .test-build/ first: scripts/test.sh, or
 // scripts/build.sh test-worker .test-build/test-worker.
 //
-// The script starts the upstream from test/harness.mjs and wrangler itself,
-// and always stops both on exit, failure or Ctrl-C.
+// The script starts the upstream from test/harness.mjs and both wranglers itself,
+// and always stops them on exit, failure or Ctrl-C.
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cases, check } from "../test/cases.mjs";
 import { startUpstream } from "../test/harness.mjs";
+import { cookieValue, sessionSetCookie } from "../test/session-cookie.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const READY_TIMEOUT_MS = 60_000;
@@ -37,36 +39,60 @@ function freePort() {
 // --- start upstream and wrangler -------------------------------------------
 
 const upstream = await startUpstream();
-const port = await freePort();
-const base = `http://127.0.0.1:${port}`;
+function startWrangler(config, extraArgs, readyPath) {
+  const instance = { log: "", exited: false, base: null, proc: null, readyPath };
+  instance.start = async () => {
+    const port = await freePort();
+    const inspectorPort = await freePort(); // the default 9229 collides between instances
+    instance.base = `http://127.0.0.1:${port}`;
+    instance.proc = spawn(
+      join(root, "worker/node_modules/.bin/wrangler"),
+      ["dev", "-c", config, "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort),
+       // own state dir: instances sharing one dev registry lock each other out
+       "--persist-to", join(root, ".wrangler", "state", basename(config, ".toml")), ...extraArgs],
+      {
+        cwd: root,
+        detached: true, // own process group, so workerd dies with it
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
+      },
+    );
+    instance.proc.stdout.on("data", (d) => (instance.log += d));
+    instance.proc.stderr.on("data", (d) => (instance.log += d));
+    instance.proc.on("exit", () => (instance.exited = true));
+  };
+  instance.stop = async () => {
+    if (!instance.proc || instance.exited) return;
+    try { process.kill(-instance.proc.pid, "SIGTERM"); } catch {}
+    for (let i = 0; i < 50 && !instance.exited; i++) await sleep(100);
+    try { process.kill(-instance.proc.pid, "SIGKILL"); } catch {}
+  };
+  instance.waitReady = async () => {
+    const deadline = Date.now() + READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (instance.exited) throw new Error(`wrangler (${config}) exited before becoming ready`);
+      try {
+        const res = await fetch(`${instance.base}${instance.readyPath}`);
+        if (res.status === 200) return;
+      } catch {}
+      await sleep(250);
+    }
+    throw new Error(`wrangler (${config}) not ready after ${READY_TIMEOUT_MS / 1000}s`);
+  };
+  return instance;
+}
 
-let log = "";
-const wrangler = spawn(
-  join(root, "worker/node_modules/.bin/wrangler"),
-  ["dev", "-c", "test/wrangler.toml", "--port", String(port), "--ip", "127.0.0.1",
-   "--var", `UPSTREAM:${upstream.url}`],
-  {
-    cwd: root,
-    detached: true, // own process group, so workerd dies with it
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
-  },
-);
-wrangler.stdout.on("data", (d) => (log += d));
-wrangler.stderr.on("data", (d) => (log += d));
-let wranglerExited = false;
-wrangler.on("exit", () => (wranglerExited = true));
+const workers = startWrangler("test/wrangler.toml", ["--var", `UPSTREAM:${upstream.url}`], "/hello");
+const yesod = startWrangler("test/yesod-wrangler.toml", [], "/count");
+await workers.start();
+await yesod.start();
 
 let cleanedUp = false;
 async function cleanup() {
   if (cleanedUp) return;
   cleanedUp = true;
   upstream.release();
-  if (!wranglerExited) {
-    try { process.kill(-wrangler.pid, "SIGTERM"); } catch {}
-    for (let i = 0; i < 50 && !wranglerExited; i++) await sleep(100);
-    try { process.kill(-wrangler.pid, "SIGKILL"); } catch {}
-  }
+  await Promise.all([workers.stop(), yesod.stop()]);
   await upstream.close();
 }
 for (const sig of ["SIGINT", "SIGTERM"]) {
@@ -76,23 +102,10 @@ for (const sig of ["SIGINT", "SIGTERM"]) {
   });
 }
 
-async function waitReady() {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (wranglerExited) throw new Error("wrangler exited before becoming ready");
-    try {
-      const res = await fetch(`${base}/hello`);
-      if (res.status === 200) return;
-    } catch {}
-    await sleep(250);
-  }
-  throw new Error(`wrangler not ready after ${READY_TIMEOUT_MS / 1000}s`);
-}
-
 // --- upstream-dependent checks (workerd only; Node covers them in
 // fetch/context/headers.test.mjs with the same expectations) ----------------
 
-const send = (path, init) => fetch(`${base}${path}`, init);
+const send = (path, init) => fetch(`${workers.base}${path}`, init);
 
 function expectEqual(problems, what, actual, expected) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -154,10 +167,10 @@ const upstreamChecks = [
     expectEqual(p, "body", await res.text(), "queued");
     // The response is in hand; /hold must be pending at the upstream now.
     if (!(await waitForHit("/hold", 5000))) p.push("upstream saw no /hold within 5s");
-    const logBefore = log.length;
+    const logBefore = workers.log.length;
     upstream.release();
     await sleep(1000);
-    const after = log.slice(logBefore);
+    const after = workers.log.slice(logBefore);
     if (/uncaught|exception|error|waitUntil/i.test(after)) p.push(`wrangler logged after release:\n${after}`);
   }],
   // Shows that the log check above would see a waitUntil failure.
@@ -165,8 +178,32 @@ const upstreamChecks = [
     const res = await send("/wait/fail");
     expectEqual(p, "status", res.status, 200);
     const deadline = Date.now() + 5000;
-    while (!log.includes("waitUntil: user error (boom)") && Date.now() < deadline) await sleep(50);
-    if (!log.includes("waitUntil: user error (boom)")) p.push("wrangler log has no \"waitUntil: user error (boom)\"");
+    while (!workers.log.includes("waitUntil: user error (boom)") && Date.now() < deadline) await sleep(50);
+    if (!workers.log.includes("waitUntil: user error (boom)")) p.push("wrangler log has no \"waitUntil: user error (boom)\"");
+  }],
+];
+
+// --- session checks against test-yesod (Node covers the same in
+// test/session.test.mjs) ------------------------------------------------------
+
+const sendYesod = (path, init) => fetch(`${yesod.base}${path}`, init);
+
+const sessionChecks = [
+  ["session survives with its cookie", async (problems) => {
+    const first = await sendYesod("/count");
+    expectEqual(problems, "first count", await first.text(), "1");
+    const cookie = `_SESSION=${cookieValue(sessionSetCookie(first))}`;
+    const second = await sendYesod("/count", { headers: { cookie } });
+    expectEqual(problems, "second count", await second.text(), "2");
+  }],
+  ["CSRF rejects a POST without the token and accepts it with", async (problems) => {
+    const form = await sendYesod("/form");
+    const token = await form.text();
+    const cookie = `_SESSION=${cookieValue(sessionSetCookie(form))}`;
+    const rejected = await sendYesod("/form", { method: "POST", headers: { cookie } });
+    expectEqual(problems, "status without token", rejected.status, 403);
+    const accepted = await sendYesod("/form", { method: "POST", headers: { cookie, "X-XSRF-TOKEN": token } });
+    expectEqual(problems, "status with token", accepted.status, 200);
   }],
 ];
 
@@ -183,8 +220,8 @@ function report(name, problems) {
 }
 
 try {
-  await waitReady();
-  console.log(`wrangler dev ready at ${base}, upstream ${upstream.url}\n`);
+  await Promise.all([workers.waitReady(), yesod.waitReady()]);
+  console.log(`wrangler dev ready at ${workers.base} and ${yesod.base}, upstream ${upstream.url}\n`);
   for (const c of cases) report(c.name, await check(send, c));
   for (const [name, run] of upstreamChecks) {
     const problems = [];
@@ -195,7 +232,16 @@ try {
     }
     report(name, problems);
   }
-  if (/uncaught/i.test(log)) {
+  for (const [name, run] of sessionChecks) {
+    const problems = [];
+    try {
+      await run(problems);
+    } catch (e) {
+      problems.push(`threw ${e?.stack ?? e}`);
+    }
+    report(name, problems);
+  }
+  if (/uncaught/i.test(workers.log + yesod.log)) {
     failures += 1;
     console.log("FAIL wrangler log has an uncaught exception");
   }
@@ -204,7 +250,9 @@ try {
   console.log(`FAIL ${e.message}`);
 }
 
-if (failures > 0 || process.env.SHOW_WRANGLER_LOG) console.log(`\n--- wrangler log ---\n${log}--- end wrangler log ---`);
+if (failures > 0 || process.env.SHOW_WRANGLER_LOG) {
+  console.log(`\n--- wrangler log (test-worker) ---\n${workers.log}--- wrangler log (test-yesod) ---\n${yesod.log}--- end ---`);
+}
 await cleanup();
 console.log(failures === 0 ? "\nall cases ok" : `\n${failures} case(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
