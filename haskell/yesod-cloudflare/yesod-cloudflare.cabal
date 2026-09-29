@@ -1,0 +1,31 @@
+cabal-version:   3.0
+name:            yesod-cloudflare
+version:         0.1.0.0
+synopsis:        Yesod integrations for Cloudflare Workers
+description:
+  Pieces that let a Yesod application run on Cloudflare Workers through
+  wai-handler-cloudflare. Currently: a session backend on WebCrypto
+  AES-256-GCM with key rotation.
+
+license:         BSD-3-Clause
+build-type:      Simple
+
+library
+  hs-source-dirs:   src
+  exposed-modules:
+    Yesod.Cloudflare.Session
+    Yesod.Cloudflare.Session.Codec
+  build-depends:
+    , base               >=4.17 && <5
+    , base64-bytestring
+    , bytestring
+    , cloudflare-workers
+    , containers
+    , cookie
+    , text
+    , time
+    , wai
+    , yesod-core
+
+  default-language: Haskell2010
+  ghc-options:      -Wall
