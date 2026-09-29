@@ -6,7 +6,18 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder("utf-8", { fatal: true });
 export const COOKIE = "_SESSION";
-const AAD = new Uint8Array([...enc.encode(COOKIE), 1]);
+/** Additional authenticated data: cookie name ‖ format version. */
+export function aadFor(name = COOKIE, version = 1) {
+  return new Uint8Array([...enc.encode(name), version]);
+}
+const AAD = aadFor();
+
+/** The 8-byte big-endian expiry that starts every plaintext. */
+export function u64(n) {
+  const b = new Uint8Array(8);
+  new DataView(b.buffer).setBigUint64(0, BigInt(n));
+  return b;
+}
 
 export async function sessionKey(secret) {
   const base = await crypto.subtle.importKey("raw", enc.encode(secret), "HKDF", false, ["deriveKey"]);
@@ -19,13 +30,13 @@ export async function sessionKey(secret) {
   );
 }
 
-function u32(n) {
+export function u32(n) {
   const b = new Uint8Array(4);
   new DataView(b.buffer).setUint32(0, n);
   return b;
 }
 
-function concat(...parts) {
+export function concat(...parts) {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let off = 0;
   for (const p of parts) {
@@ -79,12 +90,19 @@ export function decodePayload(bytes) {
   return { expires, entries };
 }
 
-export async function seal(key, expires, entries) {
+/**
+ * Encrypt arbitrary plaintext bytes into a cookie value. The framing
+ * (version byte, random 12-byte IV, AAD) defaults to the real format; the
+ * options exist to forge cookies the backend must reject.
+ */
+export async function sealRaw(key, plaintext, { version = 1, aad = AAD } = {}) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(
-    await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: AAD }, key, encodePayload(expires, entries)),
-  );
-  return Buffer.from(concat(new Uint8Array([1]), iv, ct)).toString("base64url");
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad }, key, plaintext));
+  return Buffer.from(concat(new Uint8Array([version]), iv, ct)).toString("base64url");
+}
+
+export async function seal(key, expires, entries) {
+  return sealRaw(key, encodePayload(expires, entries));
 }
 
 /** The decoded session, or null if this key cannot open the cookie. */

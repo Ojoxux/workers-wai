@@ -57,5 +57,6 @@ main :: IO ()
 main = runCloudflareWith $ \env -> do
   current <- Env.var env "SESSION_KEY"
   old <- Env.lookupVar env "SESSION_KEY_OLD"
-  backend <- cloudflareSessionBackend (SessionKeys current (maybeToList old)) 120
+  minutes <- maybe 120 (read . T.unpack) <$> Env.lookupVar env "SESSION_MINUTES"
+  backend <- cloudflareSessionBackend (SessionKeys current (maybeToList old)) minutes
   toWaiAppPlain (App backend)

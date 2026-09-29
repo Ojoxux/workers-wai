@@ -7,6 +7,9 @@
 -- @
 --
 -- Decoding is total: malformed input gives 'Nothing', never an exception.
+-- Lengths and the entry count are compared as 'Integer', never narrowed to
+-- 'Int' first: on wasm32 'Int' is 32 bits, and a length of 2^31 or more
+-- would wrap to a negative number and pass a bounds check.
 module Yesod.Cloudflare.Session.Codec
   ( encodePayload
   , decodePayload
@@ -39,7 +42,10 @@ decodePayload :: B.ByteString -> Maybe (Word64, Map.Map Text B.ByteString)
 decodePayload input = do
   (expires, afterExpiry) <- word 8 input
   (count, afterCount) <- word 4 afterExpiry
-  (entries, rest) <- go (count :: Word32) afterCount []
+  -- Each entry takes at least 8 bytes (two lengths), so a count the rest of
+  -- the input cannot hold is rejected up front.
+  guard (toInteger (count :: Word32) * 8 <= toInteger (B.length afterCount))
+  (entries, rest) <- go count afterCount []
   guard (B.null rest)
   pure (expires, Map.fromList entries)
   where
@@ -51,7 +57,7 @@ decodePayload input = do
       go (n - 1) afterValue ((key, value) : acc)
     field bs = do
       (len, afterLen) <- word 4 bs
-      guard (fromIntegral (len :: Word32) <= B.length afterLen)
+      guard (toInteger (len :: Word32) <= toInteger (B.length afterLen))
       pure (B.splitAt (fromIntegral len) afterLen)
 
 -- | A big-endian unsigned integer of the given byte width.
