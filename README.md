@@ -21,8 +21,9 @@ handler is also just a function, so a small adapter is enough to connect them.
 ```
 
 The Haskell code is compiled by GHC's wasm backend to a wasm32-wasi reactor
-module, which `worker/src/index.mjs` instantiates once per isolate and then calls
-for every fetch event.
+module. `worker/src/index.mjs` delegates to `makeWorker` in
+`worker/src/runtime.mjs`, which instantiates the module once per isolate and
+then calls it for every fetch event.
 
 ## Status
 
@@ -62,11 +63,13 @@ The limit is 64 MiB uncompressed, so size is not a constraint. Getting Yesod to
 
 ```
 haskell/wai-handler-cloudflare   the handler: Network.Wai.Handler.Cloudflare
+haskell/cloudflare-workers       typed Workers bindings: Fetch, Env, Context, runWorker
+haskell/test-worker              a Worker that exercises cloudflare-workers, for the tests
 haskell/demo-wai                 a bare WAI Application
 haskell/demo-yesod               a minimal Yesod application
 haskell/shims/                   stand-ins for packages with no wasm build
 worker/                          the Cloudflare Worker (JavaScript + WASI shim)
-scripts/                         build, inspect and smoke-test helpers
+scripts/                         build, test, inspect and wrangler-check helpers
 ```
 
 ## Building

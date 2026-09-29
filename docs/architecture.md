@@ -5,47 +5,78 @@ module**. A reactor module, unlike a command module, has no entry point of its
 own and stays alive between calls — exactly the shape a Worker needs.
 
 ```
-worker/src/index.mjs           Workers fetch handler (JavaScript)
-  |  instantiates once per isolate
+worker/src/index.mjs           Workers entry: makeWorker(wasm, jsffi)
+worker/src/runtime.mjs         makeWorker: boot once per isolate, forward fetch
   +-- worker/src/wasi.mjs      minimal wasi_snapshot_preview1 shim
   +-- generated/ghc_wasm_jsffi.js   JSFFI glue, emitted by post-link.mjs
   +-- generated/app.wasm       the Haskell program
         |
-        |  exports: waiMain, handleRequest
+        |  exports: setEnv, workerMain, handleRequest
         v
-haskell/wai-handler-cloudflare
-  Network.Wai.Handler.Cloudflare
-    runCloudflare      :: Application -> IO ()   -- register
-    handleRequest      :: JSVal -> IO JSVal      -- exported to JavaScript
-    fromWorkerRequest  :: JSVal -> IO Request
-    toWorkerResponse   :: Response -> IO JSVal
+haskell/cloudflare-workers     typed Workers bindings
+  Cloudflare.Workers.Entry     runWorker :: (Env -> IO Handler) -> IO ()
+  Cloudflare.Workers.Fetch     Request / Body / Response, fetch
+  Cloudflare.Workers.Env       var, lookupVar
+  Cloudflare.Workers.Context   waitUntil
         |
         v
-haskell/demo-wai               a bare WAI Application
-haskell/demo-yesod             a minimal Yesod application
+haskell/wai-handler-cloudflare runCloudflareWith :: (Env -> IO Application) -> IO ()
+        |
+        v
+haskell/demo-wai, demo-yesod   WAI / Yesod applications
+haskell/test-worker            one route per cloudflare-workers behaviour
 haskell/shims/*                stand-ins for packages that lack a wasm build
 ```
 
 ## Request lifecycle
 
-1. **First request in an isolate** — `index.mjs` instantiates the wasm module.
-   The `ghc_wasm_jsffi` import object needs to reach the instance's exports,
-   which do not exist yet, so GHC's documented knot-tying trick is used: pass an
-   empty object, then `Object.assign` the exports into it afterwards.
-2. `wasi.initialize(instance)` calls the module's `_initialize` export exactly
-   once, which runs the wasm constructors and brings up the Haskell RTS.
-3. `await instance.exports.waiMain()` runs the application's `main`, which calls
-   `runCloudflare app`. That stores the `Application` and returns immediately —
-   there is no accept loop to enter.
-4. **Every request** — `instance.exports.handleRequest(request)` is called with
-   the JavaScript `Request`. JSFFI exports are asynchronous by default, so this
-   returns a `Promise<Response>`, which is exactly what `fetch` may return.
+1. **First request in an isolate** — `makeWorker` copies the string entries
+   of `env` into the WASI environ (unless `envAsEnviron: false`), then
+   instantiates the module, tying the JSFFI knot: an empty object is passed
+   as the exports table and filled in afterwards.
+2. `wasi.initialize(instance)` calls `_initialize` once: wasm constructors and
+   the Haskell RTS.
+3. `setEnv(env, exposeErrors)` hands the env object, and whether 500s may
+   carry exception details, to `Cloudflare.Workers.Entry`.
+4. `workerMain()` runs the application's `main`, which calls `runWorker` (or
+   `runCloudflareWith`). That builds the handler from the env, stores it, and
+   returns.
+5. **Every request** — `handleRequest(request, ctx)` converts the JS
+   `Request`, runs the handler, and converts the result. JSFFI exports are
+   asynchronous, so JavaScript receives a `Promise<Response>`. An exception
+   becomes a generic 500, and its details are written to `console.error`.
 
 Instantiation is deferred to the first request rather than done at module scope,
 so it is billed as request time instead of counting against the much tighter
 startup CPU time limit. The promise is cached, so concurrent first requests share
-one boot; a failed boot clears the cache so the next request retries rather than
+one boot; a failed boot answers that request with a generic 500, logs the stack
+to `console.error`, and clears the cache so the next request retries rather than
 wedging the isolate.
+
+## Error responses
+
+Clients never see exception details by default — the same choice Warp, Yesod,
+Express and Workers' own error 1101 page make. An uncaught exception in the
+handler, or a failed boot, produces:
+
+```
+HTTP/1.1 500 Internal Server Error
+content-type: text/plain; charset=utf-8
+
+Internal Server Error
+ray: 8c1f0e2b9a7d4e31-NRT
+```
+
+The full detail — the exception text, or the boot failure's stack — goes to
+`console.error` with the same `ray: <id>` line. The id is the request's
+`cf-ray` header, which Cloudflare sets on every request, or a generated UUID
+where there is none (as under Node, or for some `wrangler dev` requests). Search
+`wrangler tail` or Workers Logs for the id a client reports to find the cause.
+
+For development, `makeWorker(wasm, jsffi, { exposeErrors: true })` puts the
+detail in the body as well, followed by the ray line. `worker/src/index.mjs`
+leaves it off; `test/worker.mjs` turns it on so the shared cases can assert on
+exception text.
 
 For GHC 9.12 this sequence — instantiate, knot-tie, `_initialize`, call exports —
 is complete. There is no separate JSFFI init function to invoke.
@@ -65,17 +96,21 @@ A reactor module cannot run `main` by itself, so the application module exports
 it explicitly — the one wasm-specific line an application needs:
 
 ```haskell
-foreign export javascript "waiMain" main :: IO ()
+foreign export javascript "workerMain" main :: IO ()
 ```
 
-The registered `Application` lives in an `IORef` inside the Haskell heap. Nothing
-is written to `globalThis`, and the JavaScript side only ever touches the wasm
-instance's own exports.
+The handler lives in an `IORef` inside `Cloudflare.Workers.Entry`, next to the
+env. `setEnv` and `handleRequest` are exported by the library, so the
+application still writes exactly one `foreign export`.
 
 WAI's continuation-passing shape — `Application = Request -> (Response -> IO
 ResponseReceived) -> IO ResponseReceived` — cannot be observed from JavaScript,
-so `handleRequest` passes a continuation that captures the `Response` and then
-converts it.
+so `serve`, in `Network.Wai.Handler.Cloudflare` (haskell/wai-handler-cloudflare),
+passes the `Application` a continuation that captures the `Response` it is
+given into an `IORef`, then converts that into a `Cloudflare.Workers.Fetch.Response`.
+That conversion is what `runCloudflareWith` registers as the `Handler`;
+`Cloudflare.Workers.Entry.handleRequest` just calls it and hands the result
+back to JavaScript.
 
 ## Crossing the FFI boundary
 
@@ -95,17 +130,22 @@ The outer constructor copies, so the result stays valid after the Haskell buffer
 is collected. A synchronous import cannot trigger a GC, which is what makes the
 raw pointer sound — the same guarantee an `unsafe` C FFI call relies on.
 
-**Request bodies.** The reverse, and asynchronous because the body has to be
-awaited:
+**Request bodies.** The reverse, and read lazily: a JavaScript body is not
+awaited when a `Request` or `Response` is converted, only when
+`Cloudflare.Workers.Fetch.bytes` (or `text`) is actually called, through an
+asynchronous (`safe`) import:
 
 ```haskell
-foreign import javascript safe
-  "const b = await $1.arrayBuffer(); return new Uint8Array(b);"
-  js_reqBody :: JSVal -> IO JSVal
+foreign import javascript safe "return new Uint8Array(await $1.arrayBuffer());"
+  js_readBytes :: JSVal -> IO JSVal
 ```
 
 Only the calling Haskell thread suspends on the promise. A second, synchronous
-import then writes the `Uint8Array` into a freshly allocated `ByteString`.
+import then copies the `Uint8Array` into a freshly allocated `ByteString`. A
+`cloudflare-workers` handler that never calls `bytes`/`text` never awaits the
+request body at all; `wai-handler-cloudflare`'s `toWaiRequest` calls `F.bytes`
+up front, so a WAI `Application` always sees the body read in full before it
+runs.
 
 **Headers.** Encoded as a single NUL-separated string of alternating names and
 values. A NUL can never appear in an HTTP header, and this keeps a JSON library
@@ -122,7 +162,9 @@ describe.
 The implemented set is read off the compiled module rather than assumed; see
 [development.md](development.md). Broadly:
 
-- **argv / environ** — an empty environment and a single fake argv entry
+- **argv / environ** — a single fake argv entry, and an environ built from the
+  string-valued entries of the Worker's `env` (unless `makeWorker` is called
+  with `envAsEnviron: false`, in which case it is empty)
 - **clocks** — `Date.now()`, which Workers deliberately keeps coarse
 - **stdout / stderr** — line-buffered into `console.log` / `console.error`
 - **filesystem** — none. `fd_prestat_get` returns `EBADF` for fd 3, which is how

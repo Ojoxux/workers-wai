@@ -10,9 +10,11 @@
 --   memory         real: constEq reimplemented as constant-time comparison.
 --   clientsession  fictional: no AES/Skein. Sessions must be disabled.
 packages:
+  haskell/cloudflare-workers
   haskell/wai-handler-cloudflare
   haskell/demo-wai
   haskell/demo-yesod
+  haskell/test-worker
   haskell/shims/network
   haskell/shims/entropy
   haskell/shims/memory

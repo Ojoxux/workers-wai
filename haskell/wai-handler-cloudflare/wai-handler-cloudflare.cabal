@@ -17,12 +17,10 @@ library
   build-depends:
     , base             >=4.17 && <5
     , bytestring
-    , case-insensitive
-    -- GHC.Wasm.Prim (JSVal, JSString, the JSFFI machinery). This is what ties
-    -- the package to GHC's wasm backend; it will not build natively.
-    , ghc-experimental
+    , cloudflare-workers
     , http-types
     , network
+    , text
     , vault
     , wai
 

@@ -13,14 +13,15 @@ rts/Main.h:15:5: note: previous declaration is here
    15 | int hs_main (int argc, char *argv[], ...
 ```
 
-`rts/Main.h` already declares `hs_main`. Hence `waiMain`. Any name in the RTS's C
-namespace is a hazard; avoid the `hs_` prefix entirely.
+`rts/Main.h` already declares `hs_main`. Hence exports are named `setEnv`,
+`workerMain` and `handleRequest` instead. Any name in the RTS's C namespace is
+a hazard; avoid the `hs_` prefix entirely.
 
 ## JSFFI exports do not need `-optl-Wl,--export`
 
 GHC emits the wasm exports for `foreign export javascript` automatically.
-`scripts/inspect-wasm.mjs` confirms `waiMain` and `handleRequest` are both
-present with only:
+`scripts/inspect-wasm.mjs` confirms `setEnv`, `workerMain` and `handleRequest`
+are all present with only:
 
 ```
 -no-hs-main -optl-mexec-model=reactor
@@ -28,6 +29,67 @@ present with only:
 
 The `--export` linker flags that the GHC user's guide describes are needed for
 plain reactor exports, not for JSFFI ones.
+
+## A JS exception in an `unsafe` import is not a Haskell exception
+
+It unwinds straight through the RTS and out of whichever export was running,
+so `catch` never sees it. `unsafe` (synchronous) imports are therefore kept to
+snippets that cannot throw — property reads, byte copies. Anything that can
+throw (`new Response`, `fetch`, `ctx.waitUntil`) is a `safe` import.
+
+## `JSString` in an import type needs its constructor in scope
+
+Otherwise GHC generates a C stub referring to `HsJSString`, `rts_mkJSString` and `rts_getJSString`, none of which exist, and the package fails to build. `Cloudflare.Workers.Internal.FFI` therefore re-exports `JSString (..)`, and modules declaring imports get it from there.
+
+## Haskell threads that sleep keep a JS timer alive
+
+The wasm RTS implements `threadDelay` with `setTimeout`. Yesod starts
+background threads (auto-update caches) that sleep forever, so a Node process
+running the module never exits on its own after one request — which is why
+`scripts/test.sh` passes `--test-force-exit` to `node --test` (and
+`--test-timeout` so a genuine hang still fails the run rather than wedging
+it).
+
+Under `wrangler dev`, `demo-yesod` served repeated requests over roughly 25
+seconds, including idle periods, with no errors or warnings. Whether those
+timers keep firing between requests on workerd — and if so, whether that
+costs anything — is not verified; this is an open question, not a claim that
+it is harmless.
+
+## `waitUntil` work keeps running after the response on workerd
+
+`scripts/check-wrangler.mjs` checks this under `wrangler dev` (wrangler
+4.129.1), with the same expectations as the Node tests:
+
+- `/wait/beacon` returns `queued`, and the upstream then receives the
+  `/beacon` fetch made inside `waitUntil`.
+- `/wait/hold` returns `queued` while the upstream is still holding the
+  `/hold` request open. After the upstream releases it, wrangler logs nothing
+  further — no uncaught exception, no `waitUntil:` error.
+- A failing `waitUntil` action (`/wait/fail`) is logged by workerd as
+  `✘ [ERROR] waitUntil: user error (boom)`, and the request still gets its 200.
+  This shows the "nothing logged" check above would have caught a failure.
+
+Outbound `fetch` from the wasm module to an upstream on `127.0.0.1` works
+under `wrangler dev` with no extra configuration, and every check that passes
+under Node also passes there. No behaviour difference between Node and workerd
+has been found.
+
+## A `safe` import's result is a lazy thunk
+
+The effect is not awaited, and a rejection is not raised, until the result is
+forced. `try act` alone catches nothing. `Cloudflare.Workers.Internal.FFI`
+provides `awaitJS`, which forces the result inside `try` and converts GHC's
+`JSException` into a `JSError` with the JS error's name, message and stack:
+
+```haskell
+awaitJS :: IO a -> IO a
+awaitJS act = do
+  result <- try (act >>= evaluate)
+  case result of
+    Right a                   -> pure a
+    Left (Prim.JSException v) -> toJSError v >>= throwIO
+```
 
 ## The WASI surface is version- and dependency-dependent
 

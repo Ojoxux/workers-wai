@@ -15,33 +15,47 @@ Two things are worth checking with it:
 really does move: `demo-wai` needs 20, `demo-yesod` needs 21. Re-run this after
 changing the GHC version or the dependency set.
 
-**That the exports are there.** `waiMain` and `handleRequest` should both appear.
-GHC emits them automatically for `foreign export javascript`, but a typo in the
-export name produces a module that instantiates fine and then fails with
-`instance.exports.waiMain is not a function`.
+**That the exports are there.** `setEnv`, `workerMain` and `handleRequest`
+should all appear. GHC emits them automatically for `foreign export
+javascript`, but a typo in the export name produces a module that instantiates
+fine and then fails with `instance.exports.workerMain is not a function`.
 
-## Fast feedback loop
+## Tests
 
 ```sh
-node scripts/smoke.mjs
+scripts/test.sh
 ```
 
-Boots the same wasm module under Node, with the same WASI shim and the same
-generated JSFFI glue, and drives it with synthetic `Request`s. Node exposes the
-same `Request`, `Response` and `URL` globals as the Workers runtime, so the code
-under test is identical — but it runs in about a second instead of starting
-`wrangler`.
+Builds `test-worker`, `demo-wai` and `demo-yesod` into `.test-build/`, then
+runs `test/*.test.mjs` with Node's test runner. Each test boots a module
+through `worker/src/runtime.mjs` — the same code path as production — with a
+fake `ExecutionContext` and, for outbound fetch, a local HTTP server.
 
-Use it for everything except the final check. It covers the root route, path and
-query parsing, header conversion, a POST with a body, and `responseStream`.
+After the first build, `node --test --test-force-exit --test-timeout=30000
+"test/*.test.mjs"` reruns the tests alone — plain `node --test` never exits
+once a test has loaded `demo-yesod`, whose background threads keep a JS timer
+alive (see [constraints.md](constraints.md)).
 
-The one thing it cannot tell you is how workerd itself behaves, so confirm with
-`wrangler dev` before believing a result.
+Node is not workerd. To check `test-worker` against the real runtime:
+
+```sh
+node scripts/check-wrangler.mjs
+```
+
+It needs a build of `test-worker` in `.test-build/` (`scripts/test.sh` makes
+one). The script starts the upstream server from `test/harness.mjs`, runs
+`wrangler dev -c test/wrangler.toml` on a free port with `UPSTREAM` pointing at
+it, waits for `/hello`, and then runs the shared cases in `test/cases.mjs` plus
+workerd-only checks that need the upstream: outbound fetch, Set-Cookie
+passthrough, and `waitUntil` work continuing after the response. wrangler and
+the upstream are stopped on exit, failure or Ctrl-C. `SHOW_WRANGLER_LOG=1`
+prints wrangler's log even when everything passes (it is always printed on
+failure).
 
 ## The build script
 
 ```sh
-scripts/build.sh [target]     # target defaults to demo-wai
+scripts/build.sh [target] [out-dir]   # defaults: demo-wai, worker/generated
 ```
 
 It does three things:
