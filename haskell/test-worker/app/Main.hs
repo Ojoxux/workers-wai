@@ -10,7 +10,7 @@ import           Cloudflare.Workers.Entry   (runWorker)
 import           Cloudflare.Workers.Env     (Env)
 import qualified Cloudflare.Workers.Env     as Env
 import qualified Cloudflare.Workers.Fetch   as F
-import           Control.Monad              (void)
+import           Control.Monad              (join, void)
 import           Data.Bits                  (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
@@ -103,7 +103,8 @@ route env req ctx =
     ["crypto", "random", n]
       | Just len <- readMaybe (T.unpack n) -> do
           b <- Crypto.randomBytes len
-          pure (ok (T.pack (show (B.length b) <> " " <> show (B.any (/= 0) b))))
+          let tailNonZero = B.any (/= 0) (B.drop (B.length b - 64) b)
+          pure (ok (T.pack (show (B.length b) <> " " <> show (B.any (/= 0) b) <> " " <> show tailNonZero)))
     ["crypto", "random-hex", n]
       | Just len <- readMaybe (T.unpack n) -> ok . toHex <$> Crypto.randomBytes len
     ["crypto", "selftest"] -> do
@@ -136,7 +137,7 @@ segments u =
 params :: F.Request -> [B.ByteString] -> Maybe [B.ByteString]
 params req names =
   let query = parseQuery (BC.pack (T.unpack (T.dropWhile (/= '?') (F.url req))))
-   in traverse (\n -> lookup n query >>= id >>= fromHex) names
+   in traverse (\n -> join (lookup n query) >>= fromHex) names
 
 toHex :: B.ByteString -> Text
 toHex = T.pack . concatMap byte . B.unpack
@@ -144,6 +145,7 @@ toHex = T.pack . concatMap byte . B.unpack
     byte w = [digit (w `shiftR` 4), digit (w .&. 15)]
     digit d = "0123456789abcdef" !! fromIntegral d
 
+-- | Lowercase only, which is what Node's hex encoding produces.
 fromHex :: B.ByteString -> Maybe B.ByteString
 fromHex s
   | odd (B.length s) = Nothing

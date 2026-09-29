@@ -64,9 +64,31 @@ test("open returns Nothing for a tampered ciphertext, a wrong key or a wrong AAD
   assert.equal((await get(`/crypto/open?${query({ ...rest, aad: enc.encode("other") })}&ct=${sealed}`)).text, "Nothing");
 });
 
-test("randomBytes returns the requested length across the 65536-byte chunk limit", async () => {
-  assert.equal((await get("/crypto/random/100000")).text, "100000 True");
-  assert.equal((await get("/crypto/random/0")).text, "0 False");
+test("open returns Nothing for a ciphertext shorter than the tag", async () => {
+  const sealed = (await get(`/crypto/seal?${query(input)}`)).text;
+  const { pt, ...rest } = input;
+  assert.equal((await get(`/crypto/open?${query(rest)}&ct=${sealed.slice(0, 20)}`)).text, "Nothing");
+});
+
+test("an empty IV is a caller error, for seal and for open", async () => {
+  const sealed = (await get(`/crypto/seal?${query(input)}`)).text;
+  const { pt, ...rest } = input;
+  const empty = new Uint8Array(0);
+  const seal = await get(`/crypto/seal?${query({ ...input, iv: empty })}`);
+  assert.equal(seal.status, 500);
+  assert.match(seal.text, /empty IV/);
+  const open = await get(`/crypto/open?${query({ ...rest, iv: empty })}&ct=${sealed}`);
+  assert.equal(open.status, 500);
+  assert.match(open.text, /empty IV/);
+});
+
+// "<len> <any byte non-zero> <any of the last 64 bytes non-zero>": the tail
+// check catches a chunk that was never filled.
+test("randomBytes fills every chunk across the 65536-byte limit", async () => {
+  assert.equal((await get("/crypto/random/100000")).text, "100000 True True");
+  assert.equal((await get("/crypto/random/65536")).text, "65536 True True");
+  assert.equal((await get("/crypto/random/65537")).text, "65537 True True");
+  assert.equal((await get("/crypto/random/0")).text, "0 False False");
 });
 
 test("two random draws differ", async () => {

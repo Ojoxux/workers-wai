@@ -28,7 +28,7 @@ newtype AesGcmKey = AesGcmKey JSVal
 -- Requests above its 65,536-byte limit are filled in chunks.
 randomBytes :: Int -> IO B.ByteString
 randomBytes n
-  | n < 0 = error ("Cloudflare.Workers.Crypto.randomBytes: negative length " <> show n)
+  | n < 0 = ioError (userError ("Cloudflare.Workers.Crypto.randomBytes: negative length " <> show n))
   | n == 0 = pure B.empty
   | otherwise = BI.create n $ \ptr ->
       let fill off
@@ -50,16 +50,18 @@ hkdfAesGcmKey ikm salt info = do
 -- | Ciphertext followed by the 16-byte authentication tag.
 aesGcmEncrypt :: AesGcmKey -> B.ByteString -> B.ByteString -> B.ByteString -> IO B.ByteString
 aesGcmEncrypt (AesGcmKey key) iv aad plaintext = do
+  requireIv iv
   iv' <- toJSBytes iv
   aad' <- toJSBytes aad
   pt' <- toJSBytes plaintext
   awaitJS (js_encrypt key iv' aad' pt') >>= fromJSBytes
 
--- | 'Nothing' when authentication fails (wrong key, wrong AAD, tampered
--- data): WebCrypto reports that, and only that, as @OperationError@. Any
--- other failure is a caller error and is thrown as 'JSError'.
+-- | 'Nothing' when the data does not authenticate under this key/IV/AAD —
+-- wrong key, wrong AAD, tampered data, or a ciphertext shorter than the
+-- tag; other failures are thrown.
 aesGcmDecrypt :: AesGcmKey -> B.ByteString -> B.ByteString -> B.ByteString -> IO (Maybe B.ByteString)
 aesGcmDecrypt (AesGcmKey key) iv aad ciphertext = do
+  requireIv iv
   iv' <- toJSBytes iv
   aad' <- toJSBytes aad
   ct' <- toJSBytes ciphertext
@@ -69,6 +71,13 @@ aesGcmDecrypt (AesGcmKey key) iv aad ciphertext = do
     Left err
       | jsErrorName err == "OperationError" -> pure Nothing
       | otherwise -> throwIO err
+
+-- | WebCrypto reports an empty IV as OperationError, which decrypt would
+-- turn into Nothing. It is a caller bug, so fail loudly instead.
+requireIv :: B.ByteString -> IO ()
+requireIv iv
+  | B.null iv = throwIO (userError "Cloudflare.Workers.Crypto: empty IV")
+  | otherwise = pure ()
 
 -- | unsafe: getRandomValues only throws above 65,536 bytes, and
 -- 'randomBytes' never asks for more. Writes straight into wasm memory,
