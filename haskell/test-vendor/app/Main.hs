@@ -33,20 +33,40 @@ import           Data.Text                      (Text)
 import qualified Data.Text                      as T
 import qualified Data.Text.Encoding             as TE
 import           Data.Word                      (Word64)
+import           Network.HTTP.Client            (Manager, defaultManagerSettings, newManager)
 import           Network.Wai.Handler.Cloudflare (runCloudflare)
 import qualified Web.ClientSession              as CS
+import           Yesod.Auth
+import           Yesod.Auth.OAuth2.GitHub       (oauth2GitHub)
 import           Yesod.Core
+import           Yesod.Form.I18n.English        (englishFormMessage)
+import           Yesod.Form.Types               (FormMessage)
 
-data App = App
+-- | The HTTP manager is never used here: these checks only boot the auth
+-- subsite. Making it reach the network on Workers is sub-project B-2.
+newtype App = App Manager
 
 mkYesod "App" [parseRoutes|
 /vectors VectorsR GET
 /random  RandomR  GET
 /clientsession ClientSessionR GET
+/auth AuthR Auth getAuth
 |]
 
 instance Yesod App where
   makeSessionBackend _ = pure Nothing
+
+instance RenderMessage App FormMessage where
+  renderMessage _ _ = englishFormMessage
+
+instance YesodAuth App where
+  type AuthId App = Text
+  loginDest _ = VectorsR
+  logoutDest _ = VectorsR
+  authPlugins _ = [oauth2GitHub "test-client-id" "test-client-secret"]
+  authenticate = pure . Authenticated . credsIdent
+  maybeAuthId = lookupSession credsKey
+  authHttpManager = (\(App m) -> m) <$> getYesod
 
 -- | A named check: expected and actual, both as printable bytes.
 type Check = (Text, B.ByteString, B.ByteString)
@@ -220,4 +240,6 @@ unhex = either error id . BAE.convertFromBase BAE.Base16
 foreign export javascript "workerMain" main :: IO ()
 
 main :: IO ()
-main = toWaiAppPlain App >>= runCloudflare
+main = do
+  manager <- newManager defaultManagerSettings
+  toWaiAppPlain (App manager) >>= runCloudflare

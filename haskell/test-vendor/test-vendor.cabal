@@ -13,10 +13,14 @@ executable test-vendor
     , cborg
     , clientsession
     , crypton
+    , http-client
     , memory
     , text
     , wai-handler-cloudflare
+    , yesod-auth
+    , yesod-auth-oauth2
     , yesod-core
+    , yesod-form
 
   default-language: Haskell2010
   ghc-options:
