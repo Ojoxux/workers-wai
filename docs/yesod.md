@@ -191,8 +191,10 @@ startup, so everything that uses the global manager goes through fetch.
 
 ### Checking GitHub login by hand
 
-Not automated, because it needs real GitHub credentials. Run it when migrating
-an existing app, such as times_ojoxux.
+Not automated, because it needs real GitHub credentials. `<target>` below is
+your own app: wired as in the snippet above and added as an executable to
+`cabal.project`. No target in this repo reads `GITHUB_CLIENT_ID` or
+`GITHUB_CLIENT_SECRET`.
 
 1. Register a GitHub OAuth App. For local dev the callback URL is
    `http://localhost:8787/auth/page/github/callback`.

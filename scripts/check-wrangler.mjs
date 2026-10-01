@@ -243,40 +243,43 @@ const vendorChecks = [
 
 // --- http-client over fetch (Node covers the same in test/fetch-manager.test.mjs)
 
-async function viaManager(params) {
+// Also records a problem unless the /http route itself answered 200; its text
+// carries the Manager's result.
+async function viaManager(p, params) {
   const res = await sendVendor(`/http?${new URLSearchParams(params)}`);
   const text = await res.text();
   const [head, ...rest] = text.split("\n\n");
   const [status, ...headers] = head.split("\n");
-  return { http: res.status, text, status, headers, body: rest.join("\n\n") };
+  if (res.status !== 200) p.push(`route returned ${res.status}: ${text}`);
+  return { text, status, headers, body: rest.join("\n\n") };
 }
 
 const managerChecks = [
   ["manager GET", async (p) => {
-    const r = await viaManager({ url: `${upstream.url}/echo-all` });
+    const r = await viaManager(p, { url: `${upstream.url}/echo-all` });
     expectEqual(p, "status", r.status, "200");
     if (r.status === "200") expectEqual(p, "method", JSON.parse(r.body).method, "GET");
   }],
   ["manager form POST", async (p) => {
-    const r = await viaManager({ url: `${upstream.url}/echo-all`, method: "POST", contentType: "application/x-www-form-urlencoded", body: "a=1&b=2" });
+    const r = await viaManager(p, { url: `${upstream.url}/echo-all`, method: "POST", contentType: "application/x-www-form-urlencoded", body: "a=1&b=2" });
     if (r.status !== "200") return p.push(r.text);
     expectEqual(p, "body", JSON.parse(r.body).body, "a=1&b=2");
   }],
   ["manager leaves redirects to http-client", async (p) => {
-    const r = await viaManager({ url: `${upstream.url}/redirect`, redirects: "0" });
+    const r = await viaManager(p, { url: `${upstream.url}/redirect`, redirects: "0" });
     expectEqual(p, "status", r.status, "302");
   }],
   ["manager decompresses gzip once", async (p) => {
-    const r = await viaManager({ url: `${upstream.url}/gzip` });
+    const r = await viaManager(p, { url: `${upstream.url}/gzip` });
     expectEqual(p, "body", r.body, "hello gzip");
   }],
   ["manager wraps fetch failures", async (p) => {
-    const r = await viaManager({ url: "http://127.0.0.1:1/" });
+    const r = await viaManager(p, { url: "http://127.0.0.1:1/" });
     if (!/^exception ConnectionFailure/.test(r.text)) p.push(r.text);
   }],
   ["manager wraps body-read failures", async (p) => {
-    const r = await viaManager({ url: `${upstream.url}/broken-body` });
-    if (!/^exception ConnectionFailure/.test(r.text)) p.push(r.text);
+    const r = await viaManager(p, { url: `${upstream.url}/broken-body` });
+    if (!/^exception ConnectionFailure.*while reading the response body/s.test(r.text)) p.push(r.text);
   }],
 ];
 

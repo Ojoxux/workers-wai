@@ -139,7 +139,12 @@ async function httpText(params) {
 }
 
 test("a failure while reading the response body is an HttpException ConnectionFailure", async () => {
-  assert.match(await httpText({ url: `${upstream.url}/broken-body` }), /^exception ConnectionFailure/);
+  assert.match(await httpText({ url: `${upstream.url}/broken-body` }), /^exception ConnectionFailure.*while reading the response body/s);
+});
+
+test("a GET with a body is an InternalException, not a ConnectionFailure", async () => {
+  const text = await httpText({ url: `${upstream.url}/echo-all`, method: "GET", body: "x" });
+  assert.match(text, /^exception InternalException.*GET or HEAD/s);
 });
 
 test("# and \\ in a raw path are percent-encoded, not taken as fragment or separator", async () => {

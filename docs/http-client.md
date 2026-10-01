@@ -60,13 +60,16 @@ pure Haskell and has no JavaScript in it.
 ## Errors
 
 - A `fetch` that yields no usable response, or a response body that fails part
-  way through reading, is `HttpExceptionRequest _ (ConnectionFailure _)`.
+  way through reading, is `HttpExceptionRequest _ (ConnectionFailure _)`. A
+  body-read failure says "while reading the response body" in its message.
 - A request the bridge cannot send is `HttpExceptionRequest _ (InternalException _)`
   with the reason in the message: a malformed request, headers over 64 KiB, a
-  body over 32 MiB, or `Expect: 100-continue`. That exact value is rejected
-  because `fetch` sends the whole request at once; any other `Expect` value is
-  not forwarded and the request is sent.
-- A header value that `fetch` refuses before sending (an invalid one) is a
+  body over 32 MiB, `Expect: 100-continue`, or a `GET` or `HEAD` with a body
+  ("fetch does not allow a body on GET or HEAD"). `Expect: 100-continue` is
+  rejected because `fetch` sends the whole request at once; any other `Expect`
+  value is not forwarded and the request is sent.
+- Any other request that `fetch` refuses before sending, such as one with an
+  invalid header value, cannot be told apart from a network failure and is a
   `ConnectionFailure`.
 - A configured proxy, for http and https URLs alike, is refused with
   `InternalException` "http-client-cloudflare does not support proxies".
@@ -76,8 +79,6 @@ pure Haskell and has no JavaScript in it.
 
 - The `Host` header is not forwarded: `fetch` sets it from the URL. Connecting to
   an IP address with a custom `Host` therefore reaches that IP's default host.
-- A `GET` or `HEAD` with a body is rejected by `fetch` (a `TypeError`), which
-  surfaces as `ConnectionFailure`.
 - `managerResponseTimeout` covers the whole download, because the first read
   fetches the entire body.
 - Request and response bodies are both held in memory, so they count against the
