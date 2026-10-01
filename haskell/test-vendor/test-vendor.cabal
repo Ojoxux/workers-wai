@@ -11,6 +11,7 @@ executable test-vendor
     , base
     , bytestring
     , cborg
+    , clientsession
     , crypton
     , memory
     , text

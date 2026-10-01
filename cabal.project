@@ -7,8 +7,6 @@
 --                  operations that fail loudly. Also unblocks recv,
 --                  streaming-commons, http-semantics, http2, warp, wai-extra.
 --   entropy        real: backed by the host's crypto.getRandomValues.
---   clientsession  fictional: no AES/Skein. Applications use
---                   Yesod.Cloudflare.Session (yesod-cloudflare) instead.
 packages:
   haskell/cloudflare-workers
   haskell/yesod-cloudflare
@@ -20,7 +18,6 @@ packages:
   haskell/test-vendor
   haskell/shims/network
   haskell/shims/entropy
-  haskell/shims/clientsession
   haskell/vendor/basement-0.0.16
   haskell/vendor/memory-0.18.0
   haskell/vendor/cborg-0.2.10.0

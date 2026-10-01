@@ -34,6 +34,7 @@ import qualified Data.Text                      as T
 import qualified Data.Text.Encoding             as TE
 import           Data.Word                      (Word64)
 import           Network.Wai.Handler.Cloudflare (runCloudflare)
+import qualified Web.ClientSession              as CS
 import           Yesod.Core
 
 data App = App
@@ -41,6 +42,7 @@ data App = App
 mkYesod "App" [parseRoutes|
 /vectors VectorsR GET
 /random  RandomR  GET
+/clientsession ClientSessionR GET
 |]
 
 instance Yesod App where
@@ -193,6 +195,18 @@ cborChecks =
           Right (rest, _) -> "trailing " <> hex (BL.toStrict rest)
           Left err -> BC.pack (show err)
       )
+
+-- | "ok" when a value round-trips and a one-character change is rejected.
+getClientSessionR :: Handler Text
+getClientSessionR = liftIO $ do
+  (_, key) <- CS.randomKey
+  sealed <- CS.encryptIO key "payload"
+  let flipAt i s = B.take i s <> BC.singleton (if BC.index s i == 'A' then 'B' else 'A') <> B.drop (i + 1) s
+      tampered = flipAt (B.length sealed `div` 2) sealed
+  pure $
+    if CS.decrypt key sealed == Just "payload" && CS.decrypt key tampered == Nothing
+      then "ok"
+      else T.pack (show (CS.decrypt key sealed, CS.decrypt key tampered))
 
 getRandomR :: Handler Text
 getRandomR = liftIO (TE.decodeUtf8 . hex <$> (getRandomBytes 32 :: IO B.ByteString))
