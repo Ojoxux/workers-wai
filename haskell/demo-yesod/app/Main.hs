@@ -27,8 +27,8 @@ mkYesod "App" [parseRoutes|
 |]
 
 instance Yesod App where
-  -- The default uses clientsession to sign cookies, which needs entropy the
-  -- Workers sandbox does not offer through WASI. This PoC serves no sessions.
+  -- Sessions are disabled to keep the demo minimal. See docs/yesod.md for
+  -- Yesod.Cloudflare.Session and envClientSessionBackend.
   makeSessionBackend _ = pure Nothing
 
 getHomeR :: Handler Html

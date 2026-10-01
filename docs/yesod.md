@@ -50,7 +50,8 @@ packages failed initially: `basement`, `ram`, `entropy`, `recv`,
 `streaming-commons` and `http-semantics` all failed for the same reason — a
 `network` stub too thin to satisfy them — and `basement` and `ram` were both
 reachable only through `memory` → `crypton` → `clientsession`. Four shims and one
-cabal flag covered all six. See [shims.md](shims.md).
+cabal flag covered all six at the time; `memory` and `clientsession` have since
+been replaced by the real packages, so two shims remain. See [shims.md](shims.md).
 
 Inspecting the install plan is the quickest way to see who pulls what:
 
@@ -61,9 +62,28 @@ wasm32-wasi-cabal build exe:demo-yesod --dry-run
 That is how `crypton-x509` was traced back to `warp`'s `x509` flag rather than to
 anything Yesod actually wanted.
 
-**4. Use the Workers session backend.** The `clientsession` shim has no
-cryptography, so `defaultClientSessionBackend` cannot work. `yesod-cloudflare`
-provides a backend on WebCrypto AES-256-GCM instead:
+**4. Choose a session backend.** The real `clientsession` now builds, over the
+vendored `crypton`, so yesod-core's `envClientSessionBackend` works. The key
+comes from the environment, which `makeWorker` fills from the Worker's `env`
+object: with `envClientSessionBackend 120 "SESSION_KEY"`, `SESSION_KEY` holds
+the base64 of 96 bytes. `test-yesod` uses this when
+`SESSION_BACKEND=clientsession`.
+
+`defaultClientSessionBackend` does not work on Workers: it reads and, when
+missing, creates `config/client_session_key.aes`, and there is no filesystem
+(`path_open` returns `EBADF`), so building the backend throws.
+
+Always set a valid key, for example with
+`openssl rand -base64 96 | tr -d '\n'`. If `SESSION_KEY` is missing or is not
+the base64 of 96 bytes, clientsession's `getKeyEnv` does not fail: it generates a
+random key for that isolate, sets the variable, and prints
+`SESSION_KEY=<base64 key>` with `putStrLn`. On Workers that is `console.log`, so
+the key lands in Workers logs and `wrangler tail`, and every cold start or new
+isolate gets a different key, which breaks all existing sessions.
+
+`Yesod.Cloudflare.Session` is still the recommendation: it supports key
+rotation, uses WebCrypto AES-256-GCM, which the Workers runtime provides
+natively, and fails loudly on a bad key. It looks like this:
 
 ```haskell
 import Yesod.Cloudflare.Session
@@ -140,6 +160,15 @@ node scripts/inspect-wasm.mjs worker/generated/app.wasm
 shim reports unimplemented imports by name when called, so this would have
 surfaced as a clear log line rather than a mysterious failure — but checking is
 cheaper than debugging.
+
+## yesod-auth
+
+`yesod-auth` and `yesod-auth-oauth2` build and boot; `test-vendor` serves a
+minimal app with the GitHub plugin and checks that `/auth/login` returns 200.
+The OAuth login flow itself does not work yet: the token exchange and the user
+info request need an HTTP client that reaches the network, and `http-client`
+has none on Workers. The planned fix is an `http-client` `Manager` built on
+`fetch`.
 
 ## What works
 

@@ -43,7 +43,9 @@ import           Yesod.Form.I18n.English        (englishFormMessage)
 import           Yesod.Form.Types               (FormMessage)
 
 -- | The HTTP manager is never used here: these checks only boot the auth
--- subsite. Making it reach the network on Workers is sub-project B-2.
+-- subsite. `defaultManagerSettings` has no TLS, so a real GitHub token
+-- exchange would fail even with networking; making the OAuth flow work on
+-- Workers needs an http-client Manager over fetch, which is not built yet.
 newtype App = App Manager
 
 mkYesod "App" [parseRoutes|
@@ -185,8 +187,32 @@ cborChecks =
       , encode "map {1:2,3:4}" "a201020304" (E.encodeMapLen 2 <> E.encodeWord 1 <> E.encodeWord 2 <> E.encodeWord 3 <> E.encodeWord 4)
       , decode "double 1.1" "fb3ff199999999999a" D.decodeDouble (1.1 :: Double)
       ]
+    , canonical
     ]
   where
+    -- The 32-bit canonical and offset decoders never compiled before the
+    -- cborg patch. A rejection is compared as "rejected" so the check does not
+    -- depend on the error text.
+    canonical :: [Check]
+    canonical =
+      [ outcome "word64 canonical rejects 1b0000000000000017" "rejected" "1b0000000000000017" D.decodeWord64Canonical
+      , outcome "word64 canonical accepts 1affffffff" "4294967295" "1affffffff" D.decodeWord64Canonical
+      , outcome "int64 decodes 1b7fffffffffffffff" "9223372036854775807" "1b7fffffffffffffff" D.decodeInt64
+      , outcome "int64 decodes 1a80000000" "2147483648" "1a80000000" D.decodeInt64
+      , outcome "int64 canonical accepts 3a7fffffff" "-2147483648" "3a7fffffff" D.decodeInt64Canonical
+      , outcome "int64 canonical rejects 3a00000000" "rejected" "3a00000000" D.decodeInt64Canonical
+      , outcome "peekByteOffset after one word" "1" "1718" (D.decodeWord64 *> D.peekByteOffset)
+      ]
+
+    outcome :: (Show a) => Text -> B.ByteString -> B.ByteString -> (forall s. D.Decoder s a) -> Check
+    outcome name expected bytes decoder =
+      ( "cbor " <> name
+      , expected
+      , case deserialiseFromBytes decoder (BL.fromStrict (unhex bytes)) of
+          Right (_, v) -> BC.pack (show v)
+          Left _ -> "rejected"
+      )
+
     word64 :: Word64 -> B.ByteString -> [Check]
     word64 n bytes =
       let name = "word64 " <> T.pack (show n)
@@ -195,8 +221,7 @@ cborChecks =
     int64 :: Int64 -> B.ByteString -> [Check]
     int64 n bytes =
       let name = "int64 " <> T.pack (show n)
-       in [encode name bytes (E.encodeInt64 n)]
-            <> [decode name bytes D.decodeInt64 n | n == minBound || n `elem` [-1, -25, -1000]]
+       in [encode name bytes (E.encodeInt64 n), decode name bytes D.decodeInt64 n]
 
     integer :: Integer -> B.ByteString -> [Check]
     integer n bytes =

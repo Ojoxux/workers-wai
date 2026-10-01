@@ -10,7 +10,7 @@
 //
 //     node scripts/inspect-wasm.mjs worker/generated/app.wasm
 //
-// plus fd_readdir, added ahead of the yesod-auth build, which needs it.
+// plus fd_readdir, a precaution that no current build imports (see below).
 //
 // GHC pulls in a different set depending on its version and on what the
 // dependency tree touches, so re-run that after changing either. Anything
@@ -210,10 +210,11 @@ export function createWasi({ args = ["app.wasm"], env = {} } = {}) {
       return EBADF;
     },
 
-    // crypton-x509-system scans the system certificate directory; there is
-    // no filesystem, so there is no directory to read. No current build
-    // imports this: it is added ahead of the yesod-auth / crypton-x509-system
-    // builds, which do.
+    // Code that reads the system certificate store (crypton-x509-system, for
+    // example through http-client-tls) scans a directory; there is no
+    // filesystem, so there is none to read. No current build imports this:
+    // test-vendor does not link crypton-x509-system. It is here in case such
+    // code gets linked later.
     fd_readdir() {
       return EBADF;
     },
