@@ -4,11 +4,13 @@
 // Workers has no WASI layer of its own, and @cloudflare/workers-wasi is
 // unmaintained and lacks initialize().
 //
-// The function list below is not a guess: it is exactly the set of
-// wasi_snapshot_preview1 imports that the current build requires, as reported
-// by
+// The function list below is not a guess: it is the set of
+// wasi_snapshot_preview1 imports that the builds in this repo require, as
+// reported by
 //
 //     node scripts/inspect-wasm.mjs worker/generated/app.wasm
+//
+// plus fd_readdir, added ahead of the yesod-auth build, which needs it.
 //
 // GHC pulls in a different set depending on its version and on what the
 // dependency tree touches, so re-run that after changing either. Anything
@@ -209,7 +211,9 @@ export function createWasi({ args = ["app.wasm"], env = {} } = {}) {
     },
 
     // crypton-x509-system scans the system certificate directory; there is
-    // no filesystem, so there is no directory to read.
+    // no filesystem, so there is no directory to read. No current build
+    // imports this: it is added ahead of the yesod-auth / crypton-x509-system
+    // builds, which do.
     fd_readdir() {
       return EBADF;
     },

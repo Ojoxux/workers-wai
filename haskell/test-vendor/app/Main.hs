@@ -16,6 +16,7 @@ import           Crypto.Error                   (throwCryptoError)
 import           Crypto.Hash                    (SHA256 (..), hashWith)
 import           Crypto.MAC.HMAC                (HMAC, hmac)
 import qualified Crypto.PubKey.Curve25519       as X25519
+import qualified Crypto.PubKey.Curve448         as X448
 import           Crypto.Random                  (getRandomBytes)
 import qualified Data.ByteArray                 as BA
 import qualified Data.ByteArray.Encoding        as BAE
@@ -88,11 +89,25 @@ cryptoChecks =
           )
       )
   , pure
+      ( "x448 rfc7748 6.2"
+      , "07fff4181ac6cc95ec1c16a94a0f74d12da232ce40a77552281d282bb60c0b56fd2464c335543936521c24403085d59a449a5037514a879d"
+      , hex
+          ( X448.dh
+              (throwCryptoError (X448.publicKey (unhex "3eb7a829b0cd20f5bcfc0b599b6feccf6da4627107bdb0d4f345b43027d8b972fc3e34fb4232a13ca706dcb57aec3dae07bdc1c67bf33609")))
+              (throwCryptoError (X448.secretKey (unhex "9a8f4925d1519f5775cf46b04b5800d4ee9ee8bae8bc5565d498c28dd9c9baf574a9419744897391006382a6f127ab1d9ac2d8c0a598726b")))
+          )
+      )
+  , pure
       ( "memory constEq"
       , "True False"
       , BC.pack (show (BA.constEq abc abc) <> " " <> show (BA.constEq abc ("abd" :: B.ByteString)))
       )
   , pure ("memory convert", "616263", hex (BA.convert abc :: BA.Bytes))
+  , pure
+      ( "memory convert round trip"
+      , "True"
+      , BC.pack (show (BA.convert (BA.convert abc :: BA.Bytes) == abc))
+      )
   ]
   where
     aes = throwCryptoError (cipherInit (B.pack [0 .. 15])) :: AES128

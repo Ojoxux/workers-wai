@@ -20,17 +20,16 @@ packages:
   haskell/test-vendor
   haskell/shims/network
   haskell/shims/entropy
+  haskell/shims/clientsession
   haskell/vendor/basement-0.0.16
   haskell/vendor/memory-0.18.0
   haskell/vendor/cborg-0.2.10.0
   haskell/vendor/crypton-1.0.6
   haskell/vendor/xml-conduit-1.10.1.0
-  haskell/shims/clientsession
 
--- warp's `x509` flag defaults on and pulls in crypton-x509 -> crypton -> ram,
--- which needs mmap and TIOCGWINSZ -- neither of which WASI has. The flag only
--- enables reading TLS client certificates, and Cloudflare terminates TLS
--- upstream, so nothing is lost.
+-- warp's `x509` flag only enables reading TLS client certificates. Cloudflare
+-- terminates TLS upstream, so the crypton-x509 dependency it pulls in is
+-- unnecessary here.
 package warp
   flags: -x509
 
