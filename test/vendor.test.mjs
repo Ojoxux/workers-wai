@@ -31,3 +31,9 @@ test("the real clientsession encrypts, decrypts and rejects tampering", async ()
   assert.equal(status, 200, text);
   assert.equal(text, "ok");
 });
+
+test("yesod-auth with the GitHub OAuth2 plugin boots and renders its login page", async () => {
+  const { status, text } = await get("/auth/login");
+  assert.equal(status, 200, text);
+  assert.match(text, /\/auth\/page\/github\/forward/);
+});
