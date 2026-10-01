@@ -62,8 +62,9 @@ former `memory` shim implemented only `constEq`; the real `memory` provides the
 whole API, and `yesod-core`'s CSRF check still uses its `constEq`. The former
 `clientsession` shim raised an error on every call; the real one works, so
 `envClientSessionBackend` works too; `defaultClientSessionBackend` still needs
-a filesystem for its key file (see [yesod.md](yesod.md)). Because the vendored code includes 32-bit paths that
-nobody had run, `haskell/test-vendor` checks it against published vectors.
+a filesystem for its key file (see [yesod.md](yesod.md)). Because the vendored
+code includes 32-bit paths that nobody had run, `haskell/test-vendor` checks
+what it can against published vectors.
 
 ## One flag, not a shim
 

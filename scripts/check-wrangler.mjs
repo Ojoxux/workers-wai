@@ -175,8 +175,10 @@ const upstreamChecks = [
     await sleep(1000);
     const after = workers.log.slice(logBefore);
     // Narrow on purpose: late "unhandled exception" lines from earlier intentional-500 cases
-    // also land in this log; a waitUntil failure logs "waitUntil:" (see the next check).
-    if (/waitUntil:|uncaught/i.test(after)) p.push(`wrangler logged after release:\n${after}`);
+    // also land in this log and do not match. Any "waitUntil" line fails the check: a
+    // failure logs "waitUntil:" (see the next check), and workerd's own "waitUntil() tasks
+    // did not complete ... cancelled" warning contains the word too.
+    if (/waitUntil|uncaught/i.test(after)) p.push(`wrangler logged after release:\n${after}`);
   }],
   // Shows that the log check above would see a waitUntil failure.
   ["waitUntil failure is logged", async (p) => {
@@ -220,7 +222,7 @@ const sendVendor = (path, init) => fetch(`${vendor.base}${path}`, init);
 const vendorChecks = [
   ["vendored crypto and CBOR vectors", async (problems) => {
     const res = await sendVendor("/vectors");
-    expectEqual(problems, "vectors", await res.text(), "ok 73");
+    expectEqual(problems, "vectors", await res.text(), "ok 77");
   }],
   ["crypton randomness via random_get", async (problems) => {
     const a = await (await sendVendor("/random")).text();

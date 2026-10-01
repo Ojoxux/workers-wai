@@ -136,8 +136,7 @@ wasm32 is a 32-bit target, so it takes the `ARCH_32bit` and `CompatPrim64`
 branches that 64-bit platforms never compile. Those had stopped building:
 basement, memory and cborg all needed fixes (see `haskell/vendor/README.md`).
 A patch that compiles proves little about code nobody has run, so only what
-`haskell/test-vendor` checks against published vectors, under Node and workerd,
-should be trusted:
+`haskell/test-vendor` checks, under Node and workerd, should be trusted:
 
 - crypton: SHA-256, the AES-128 block cipher (FIPS-197), HMAC-SHA256
   (RFC 4231 cases 1 and 2), X25519 and X448 (RFC 7748).
