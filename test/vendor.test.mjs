@@ -15,7 +15,7 @@ async function get(path) {
 test("crypton, memory and cborg match their known-answer vectors", async () => {
   const { status, text } = await get("/vectors");
   assert.equal(status, 200, text);
-  assert.equal(text, "ok 67");
+  assert.equal(text, "ok 73");
 });
 
 test("crypton's random bytes come from the host and differ per call", async () => {

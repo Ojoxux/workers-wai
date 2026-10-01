@@ -63,15 +63,27 @@ That is how `crypton-x509` was traced back to `warp`'s `x509` flag rather than t
 anything Yesod actually wanted.
 
 **4. Choose a session backend.** The real `clientsession` now builds, over the
-vendored `crypton`, so yesod-core's `defaultClientSessionBackend` and
-`envClientSessionBackend` work. The key comes from the environment, which
-`makeWorker` fills from the Worker's `env` object: with
-`envClientSessionBackend 120 "SESSION_KEY"`, `SESSION_KEY` holds the base64 of
-96 bytes. `test-yesod` uses this when `SESSION_BACKEND=clientsession`.
+vendored `crypton`, so yesod-core's `envClientSessionBackend` works. The key
+comes from the environment, which `makeWorker` fills from the Worker's `env`
+object: with `envClientSessionBackend 120 "SESSION_KEY"`, `SESSION_KEY` holds
+the base64 of 96 bytes. `test-yesod` uses this when
+`SESSION_BACKEND=clientsession`.
+
+`defaultClientSessionBackend` does not work on Workers: it reads and, when
+missing, creates `config/client_session_key.aes`, and there is no filesystem
+(`path_open` returns `EBADF`), so building the backend throws.
+
+Always set a valid key, for example with
+`openssl rand -base64 96 | tr -d '\n'`. If `SESSION_KEY` is missing or is not
+the base64 of 96 bytes, clientsession's `getKeyEnv` does not fail: it generates a
+random key for that isolate, sets the variable, and prints
+`SESSION_KEY=<base64 key>` with `putStrLn`. On Workers that is `console.log`, so
+the key lands in Workers logs and `wrangler tail`, and every cold start or new
+isolate gets a different key, which breaks all existing sessions.
 
 `Yesod.Cloudflare.Session` is still the recommendation: it supports key
-rotation and uses WebCrypto AES-256-GCM, which the Workers runtime provides
-natively. It looks like this:
+rotation, uses WebCrypto AES-256-GCM, which the Workers runtime provides
+natively, and fails loudly on a bad key. It looks like this:
 
 ```haskell
 import Yesod.Cloudflare.Session

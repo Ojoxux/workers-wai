@@ -14,14 +14,22 @@ changed. `cabal.project` lists them as local packages, which shadows Hackage.
 | xml-conduit 1.10.1.0 | Its cabal-doctest `Setup.hs` links against the threaded RTS, which wasm has not; switched to `build-type: Simple`. Needed by `authenticate`, which `yesod-auth` uses. | Maintained: to be offered upstream. |
 
 The 32-bit fixes run code paths that are rarely exercised; `haskell/test-vendor`
-checks them against published vectors. `/vectors` returns `ok 67` when all of
+checks them against published vectors. `/vectors` returns `ok 73` when all of
 these pass:
 
-- crypton: SHA-256 of "abc", AES-128 (FIPS-197 C.1), HMAC-SHA256 (RFC 4231
-  test cases 1 and 2), X25519 and X448 (RFC 7748).
+- crypton: SHA-256 of "abc", the AES-128 block cipher (FIPS-197 C.1),
+  HMAC-SHA256 (RFC 4231 test cases 1 and 2), X25519 and X448 (RFC 7748).
 - memory: `constEq` on equal and unequal input, and a `convert` round trip.
-- cborg: 58 RFC 8949 vectors and boundaries, checked byte for byte and decoded
-  back.
+- cborg, 58 RFC 8949 checks (34 encode, byte for byte; 24 decode, value
+  compared): word64 and int64 boundaries (0 to 2^64-1, -1 to -2^63), one
+  integer beyond int64 (-2^64), double 1.1, 1.0e300 and -4.1, float 100000.0, a byte
+  string, a string, an array and a map. Decoding is checked for every word64
+  value, four int64 values, the integer and the double 1.1.
+- cborg canonical and offset decoders, 6 more checks (9 crypto and memory
+  checks, 58 above and these 6 make 73): `decodeWord64Canonical` rejects `1b0000000000000017` and
+  accepts `1affffffff`, `decodeInt64` reads `1b7fffffffffffffff` and
+  `1a80000000`, `decodeInt64Canonical` rejects `3a00000000`, and
+  `peekByteOffset` is 1 after decoding `17` from `1718`.
 
 Three more routes cover what the vectors cannot: `/random` (crypton randomness
 through `random_get`), `/clientsession` (a real clientsession encrypt/decrypt
@@ -32,6 +40,36 @@ under workerd.
 
 Not covered: memory's `CompatPrim64` fix, which only has to compile, and the
 OAuth login flow itself, which needs an HTTP client that reaches the network.
+clientsession is checked by a round trip and a tamper test, not by vectors.
+
+Not yet checked against vectors, to be added when a feature relies on them:
+P-256, Ed25519, ChaCha20-Poly1305, AES-GCM and AES-CTR, SHA-512, Skein-MAC,
+bcrypt and argon2, and the rest of cborg. Passing these checks says nothing
+about those.
+
+## Using these packages from another repository
+
+```
+source-repository-package
+  type: git
+  location: https://github.com/Ojoxux/workers-wai
+  tag: <a commit>
+  subdir: haskell/vendor/crypton-1.0.6
+          haskell/vendor/memory-0.18.0
+          haskell/vendor/basement-0.0.16
+          haskell/vendor/cborg-0.2.10.0
+          haskell/vendor/xml-conduit-1.10.1.0
+```
+
+Use the same `constraints:` as this repository's `cabal.project`.
+
+## Known loose ends
+
+- xml-conduit's doctest test-suite stanza is broken under `--enable-tests`,
+  because `Setup` is now `Simple`. Do not enable its tests.
+- crypton's `Crypto/Internal/Endian.hs` defaults to big-endian when
+  `ARCH_IS_LITTLE_ENDIAN` is unset, which is the case on wasm32. Nothing uses it
+  today. If a future version does, patch it with `|| arch(wasm32)`.
 
 ## Size
 

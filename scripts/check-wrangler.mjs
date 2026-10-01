@@ -220,7 +220,7 @@ const sendVendor = (path, init) => fetch(`${vendor.base}${path}`, init);
 const vendorChecks = [
   ["vendored crypto and CBOR vectors", async (problems) => {
     const res = await sendVendor("/vectors");
-    expectEqual(problems, "vectors", await res.text(), "ok 67");
+    expectEqual(problems, "vectors", await res.text(), "ok 73");
   }],
   ["crypton randomness via random_get", async (problems) => {
     const a = await (await sendVendor("/random")).text();
