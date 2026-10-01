@@ -10,6 +10,7 @@ executable test-vendor
   build-depends:
     , base
     , bytestring
+    , cborg
     , crypton
     , memory
     , text
