@@ -165,10 +165,36 @@ cheaper than debugging.
 
 `yesod-auth` and `yesod-auth-oauth2` build and boot; `test-vendor` serves a
 minimal app with the GitHub plugin and checks that `/auth/login` returns 200.
-The OAuth login flow itself does not work yet: the token exchange and the user
-info request need an HTTP client that reaches the network, and `http-client`
-has none on Workers. The planned fix is an `http-client` `Manager` built on
-`fetch`.
+The OAuth flow needs an HTTP client for the token exchange and the user info
+request, and the stock `http-client` managers cannot connect on Workers. Use the
+`Manager` from `newFetchManager` (package `http-client-cloudflare`, see
+[http-client.md](http-client.md)): build it once, then return it from the app's
+`getHttpManager` or set `authHttpManager`.
+
+```haskell
+import Network.HTTP.Client.Cloudflare (newFetchManager)
+
+main = runCloudflareWith $ \env -> do
+  manager <- newFetchManager
+  toWaiAppPlain (App manager)
+
+instance YesodAuth App where
+  authHttpManager = appHttpManager
+```
+
+### Checking GitHub login by hand
+
+Not automated, because it needs real GitHub credentials. Run it when migrating
+an existing app, such as times_ojoxux.
+
+1. Register a GitHub OAuth App. For local dev the callback URL is
+   `http://localhost:8787/auth/page/github/callback`.
+2. Put `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and a session key in
+   `.dev.vars`. Never commit that file.
+3. Build the app with `scripts/build.sh <target>`.
+4. Run `wrangler dev`.
+5. Open `/auth/login`, follow the GitHub link, approve, and confirm the app
+   shows you logged in.
 
 ## What works
 

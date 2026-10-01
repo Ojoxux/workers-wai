@@ -69,6 +69,7 @@ haskell/test-worker              a Worker that exercises cloudflare-workers, for
 haskell/test-yesod               a Yesod app that exercises the session backend, for the tests
 haskell/demo-wai                 a bare WAI Application
 haskell/demo-yesod               a minimal Yesod application
+haskell/http-client-cloudflare   http-client Manager over fetch
 haskell/test-vendor              checks the vendored crypto stack against published vectors
 haskell/vendor/                  Hackage packages patched to build for wasm (crypton, memory, ...)
 haskell/shims/                   stand-ins for packages with no wasm build (network, entropy)

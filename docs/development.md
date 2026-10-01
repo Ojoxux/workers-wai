@@ -37,7 +37,10 @@ once a test has loaded `demo-yesod`, whose background threads keep a JS timer
 alive (see [constraints.md](constraints.md)).
 
 `test-vendor` is the vendored crypto stack with yesod-auth inside, about 9.8 MiB.
-Its checks are listed in `haskell/vendor/README.md`.
+Its checks are listed in `haskell/vendor/README.md`. It also serves `/http`, which
+runs one http-client request through the fetch-backed Manager
+(`haskell/http-client-cloudflare`, see [http-client.md](http-client.md));
+`test/fetch-manager.test.mjs` drives that route against the local upstream.
 
 Node is not workerd. To check `test-worker`, `test-yesod` and `test-vendor` against the real
 runtime:
@@ -58,9 +61,11 @@ failure).
 
 It also starts a second instance, `wrangler dev -c test/yesod-wrangler.toml`,
 and runs two session and CSRF checks against it. A third instance,
-`wrangler dev -c test/vendor-wrangler.toml` (`test-vendor`), runs 4 checks: the
+`wrangler dev -c test/vendor-wrangler.toml` (`test-vendor`), runs 10 checks: the
 vendored crypto and CBOR vectors, randomness through `random_get`, the real
-clientsession round trip, and the yesod-auth login page. Each instance gets its own free
+clientsession round trip, the yesod-auth login page, and 6 manager checks for the
+fetch-backed http-client Manager (GET, form POST, redirects left to http-client,
+gzip decoded once, fetch failures and body-read failures wrapped). Each instance gets its own free
 inspector port and its own `--persist-to` state directory under
 `.wrangler/state/`, because two instances otherwise collide (see
 [constraints.md](constraints.md)).
