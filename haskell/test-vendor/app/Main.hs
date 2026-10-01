@@ -1,6 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -10,6 +11,10 @@
 -- copy.
 module Main (main) where
 
+import qualified Codec.CBOR.Decoding            as D
+import qualified Codec.CBOR.Encoding            as E
+import           Codec.CBOR.Read                (deserialiseFromBytes)
+import           Codec.CBOR.Write               (toStrictByteString)
 import           Crypto.Cipher.AES              (AES128)
 import           Crypto.Cipher.Types            (cipherInit, ecbEncrypt)
 import           Crypto.Error                   (throwCryptoError)
@@ -22,9 +27,12 @@ import qualified Data.ByteArray                 as BA
 import qualified Data.ByteArray.Encoding        as BAE
 import qualified Data.ByteString                as B
 import qualified Data.ByteString.Char8          as BC
+import qualified Data.ByteString.Lazy           as BL
+import           Data.Int                       (Int64)
 import           Data.Text                      (Text)
 import qualified Data.Text                      as T
 import qualified Data.Text.Encoding             as TE
+import           Data.Word                      (Word64)
 import           Network.Wai.Handler.Cloudflare (runCloudflare)
 import           Yesod.Core
 
@@ -46,7 +54,7 @@ getVectorsR :: Handler Text
 getVectorsR = liftIO (report <$> sequence checks)
 
 checks :: [IO Check]
-checks = cryptoChecks
+checks = cryptoChecks <> map pure cborChecks
 
 report :: [Check] -> Text
 report cs =
@@ -112,6 +120,79 @@ cryptoChecks =
   where
     aes = throwCryptoError (cipherInit (B.pack [0 .. 15])) :: AES128
     abc = "abc" :: B.ByteString
+
+-- | RFC 8949 appendix A, plus the 32-bit boundaries the vendored cborg patch
+-- touches. Each encode check compares bytes; each decode check decodes the
+-- expected bytes back and compares the value.
+cborChecks :: [Check]
+cborChecks =
+  concat
+    [ word64 0 "00"
+    , word64 1 "01"
+    , word64 10 "0a"
+    , word64 23 "17"
+    , word64 24 "1818"
+    , word64 25 "1819"
+    , word64 100 "1864"
+    , word64 255 "18ff"
+    , word64 256 "190100"
+    , word64 1000 "1903e8"
+    , word64 65535 "19ffff"
+    , word64 65536 "1a00010000"
+    , word64 1000000 "1a000f4240"
+    , word64 4294967295 "1affffffff"
+    , word64 4294967296 "1b0000000100000000"
+    , word64 1000000000000 "1b000000e8d4a51000"
+    , word64 9223372036854775808 "1b8000000000000000"
+    , word64 18446744073709551615 "1bffffffffffffffff"
+    , int64 (-1) "20"
+    , int64 (-10) "29"
+    , int64 (-24) "37"
+    , int64 (-25) "3818"
+    , int64 (-100) "3863"
+    , int64 (-1000) "3903e7"
+    , int64 (-9223372036854775808) "3b7fffffffffffffff"
+    , integer (-18446744073709551616) "3bffffffffffffffff"
+    , [ encode "double 1.1" "fb3ff199999999999a" (E.encodeDouble 1.1)
+      , encode "double 1.0e300" "fb7e37e43c8800759c" (E.encodeDouble 1.0e300)
+      , encode "double -4.1" "fbc010666666666666" (E.encodeDouble (-4.1))
+      , encode "float 100000.0" "fa47c35000" (E.encodeFloat 100000.0)
+      , encode "bytes 01020304" "4401020304" (E.encodeBytes (B.pack [1, 2, 3, 4]))
+      , encode "string IETF" "6449455446" (E.encodeString "IETF")
+      , encode "array [1,2,3]" "83010203" (E.encodeListLen 3 <> E.encodeWord 1 <> E.encodeWord 2 <> E.encodeWord 3)
+      , encode "map {1:2,3:4}" "a201020304" (E.encodeMapLen 2 <> E.encodeWord 1 <> E.encodeWord 2 <> E.encodeWord 3 <> E.encodeWord 4)
+      , decode "double 1.1" "fb3ff199999999999a" D.decodeDouble (1.1 :: Double)
+      ]
+    ]
+  where
+    word64 :: Word64 -> B.ByteString -> [Check]
+    word64 n bytes =
+      let name = "word64 " <> T.pack (show n)
+       in [encode name bytes (E.encodeWord64 n), decode name bytes D.decodeWord64 n]
+
+    int64 :: Int64 -> B.ByteString -> [Check]
+    int64 n bytes =
+      let name = "int64 " <> T.pack (show n)
+       in [encode name bytes (E.encodeInt64 n)]
+            <> [decode name bytes D.decodeInt64 n | n == minBound || n `elem` [-1, -25, -1000]]
+
+    integer :: Integer -> B.ByteString -> [Check]
+    integer n bytes =
+      let name = "integer " <> T.pack (show n)
+       in [encode name bytes (E.encodeInteger n), decode name bytes D.decodeInteger n]
+
+    encode :: Text -> B.ByteString -> E.Encoding -> Check
+    encode name expected enc = ("cbor encode " <> name, expected, hex (toStrictByteString enc))
+
+    decode :: (Show a) => Text -> B.ByteString -> (forall s. D.Decoder s a) -> a -> Check
+    decode name bytes decoder expected =
+      ( "cbor decode " <> name
+      , BC.pack (show expected)
+      , case deserialiseFromBytes decoder (BL.fromStrict (unhex bytes)) of
+          Right (rest, v) | BL.null rest -> BC.pack (show v)
+          Right (rest, _) -> "trailing " <> hex (BL.toStrict rest)
+          Left err -> BC.pack (show err)
+      )
 
 getRandomR :: Handler Text
 getRandomR = liftIO (TE.decodeUtf8 . hex <$> (getRandomBytes 32 :: IO B.ByteString))
