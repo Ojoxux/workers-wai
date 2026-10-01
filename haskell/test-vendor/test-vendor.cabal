@@ -10,10 +10,13 @@ executable test-vendor
   build-depends:
     , base
     , bytestring
+    , case-insensitive
     , cborg
     , clientsession
     , crypton
     , http-client
+    , http-client-cloudflare
+    , http-types
     , memory
     , text
     , wai-handler-cloudflare

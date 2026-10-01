@@ -1,0 +1,28 @@
+cabal-version:   3.0
+name:            http-client-cloudflare
+version:         0.1.0.0
+synopsis:        An http-client Manager that sends requests through the Workers fetch API
+description:
+  Lets libraries built on http-client (http-conduit, hoauth2,
+  yesod-auth-oauth2, ...) make outbound requests on Cloudflare Workers, where
+  there are no sockets. TLS is handled by fetch; no tls package is involved.
+
+license:         BSD-3-Clause
+build-type:      Simple
+
+library
+  hs-source-dirs:   src
+  exposed-modules:
+    Network.HTTP.Client.Cloudflare
+    Network.HTTP.Client.Cloudflare.Wire
+  build-depends:
+    , base               >=4.17 && <5
+    , bytestring
+    , case-insensitive
+    , cloudflare-workers
+    , http-client        >=0.7 && <0.8
+    , http-types
+    , text
+
+  default-language: Haskell2010
+  ghc-options:      -Wall
