@@ -4,11 +4,13 @@
 // Workers has no WASI layer of its own, and @cloudflare/workers-wasi is
 // unmaintained and lacks initialize().
 //
-// The function list below is not a guess: it is exactly the set of
-// wasi_snapshot_preview1 imports that the current build requires, as reported
-// by
+// The function list below is not a guess: it is the set of
+// wasi_snapshot_preview1 imports that the builds in this repo require, as
+// reported by
 //
 //     node scripts/inspect-wasm.mjs worker/generated/app.wasm
+//
+// plus fd_readdir, added ahead of the yesod-auth build, which needs it.
 //
 // GHC pulls in a different set depending on its version and on what the
 // dependency tree touches, so re-run that after changing either. Anything
@@ -124,6 +126,20 @@ export function createWasi({ args = ["app.wasm"], env = {} } = {}) {
       return ESUCCESS;
     },
 
+    // -- randomness -----------------------------------------------------------
+    //
+    // crypton's WASI entropy backend calls getentropy(), which wasi-libc
+    // implements with random_get. getRandomValues caps a call at 65536 bytes.
+
+    random_get(bufPtr, bufLen) {
+      const mem = bytes();
+      for (let off = 0; off < bufLen; off += 65536) {
+        const len = Math.min(65536, bufLen - off);
+        crypto.getRandomValues(mem.subarray(bufPtr + off, bufPtr + off + len));
+      }
+      return ESUCCESS;
+    },
+
     // -- file descriptors ---------------------------------------------------
     //
     // Only stdin/stdout/stderr exist, and they behave as character devices.
@@ -191,6 +207,14 @@ export function createWasi({ args = ["app.wasm"], env = {} } = {}) {
     },
 
     fd_prestat_dir_name(_fd, _pathPtr, _pathLen) {
+      return EBADF;
+    },
+
+    // crypton-x509-system scans the system certificate directory; there is
+    // no filesystem, so there is no directory to read. No current build
+    // imports this: it is added ahead of the yesod-auth / crypton-x509-system
+    // builds, which do.
+    fd_readdir() {
       return EBADF;
     },
 

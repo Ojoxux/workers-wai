@@ -1,0 +1,145 @@
+diff --color -ruN -x dist-newstyle pristine/crypton-1.0.6/Crypto/PubKey/Curve25519.hs crypton-1.0.6/Crypto/PubKey/Curve25519.hs
+--- pristine/crypton-1.0.6/Crypto/PubKey/Curve25519.hs	2001-09-09 10:46:40.000000000 +0900
++++ crypton-1.0.6/Crypto/PubKey/Curve25519.hs	2026-09-30 10:07:46.111663592 +0900
+@@ -29,6 +29,7 @@
+ import Data.Bits
+ import Data.Word
+ import Foreign.Ptr
++import Foreign.C.Types (CInt (..))
+ import Foreign.Storable
+ import GHC.Ptr
+ 
+@@ -138,12 +139,17 @@
+     modifyByte :: Ptr Word8 -> Int -> (Word8 -> Word8) -> IO ()
+     modifyByte p n f = peekByteOff p n >>= pokeByteOff p n . f
+ 
++-- The C function returns int. Declaring it IO () is a signature mismatch,
++-- which wasm-ld turns into a trapping stub on wasm32.
+ foreign import ccall "crypton_curve25519_donna"
+-    ccrypton_curve25519
++    ccrypton_curve25519_c
+         :: Ptr Word8
+         -- ^ public
+         -> Ptr Word8
+         -- ^ secret
+         -> Ptr Word8
+         -- ^ basepoint
+-        -> IO ()
++        -> IO CInt
++
++ccrypton_curve25519 :: Ptr Word8 -> Ptr Word8 -> Ptr Word8 -> IO ()
++ccrypton_curve25519 a b c = ccrypton_curve25519_c a b c >> return ()
+diff --color -ruN -x dist-newstyle pristine/crypton-1.0.6/Crypto/PubKey/Curve448.hs crypton-1.0.6/Crypto/PubKey/Curve448.hs
+--- pristine/crypton-1.0.6/Crypto/PubKey/Curve448.hs	2001-09-09 10:46:40.000000000 +0900
++++ crypton-1.0.6/Crypto/PubKey/Curve448.hs	2026-09-30 10:07:46.116370889 +0900
+@@ -30,6 +30,7 @@
+ 
+ import Data.Word
+ import Foreign.Ptr
++import Foreign.C.Types (CInt (..))
+ 
+ import Crypto.Error
+ import Crypto.Internal.ByteArray (
+@@ -115,15 +116,20 @@
+ x448_bytes :: Int
+ x448_bytes = 448 `quot` 8
+ 
++-- The C function returns crypton_decaf_error_t (an int). Declaring it IO ()
++-- is a signature mismatch, which wasm-ld turns into a trapping stub on wasm32.
+ foreign import ccall "crypton_decaf_x448"
+-    decaf_x448
++    decaf_x448_c
+         :: Ptr Word8
+         -- ^ public
+         -> Ptr Word8
+         -- ^ basepoint
+         -> Ptr Word8
+         -- ^ secret
+-        -> IO ()
++        -> IO CInt
++
++decaf_x448 :: Ptr Word8 -> Ptr Word8 -> Ptr Word8 -> IO ()
++decaf_x448 a b c = decaf_x448_c a b c >> return ()
+ 
+ foreign import ccall "crypton_decaf_x448_derive_public_key"
+     decaf_x448_derive_public_key
+diff --color -ruN -x dist-newstyle pristine/crypton-1.0.6/Crypto/Random/Entropy/Backend.hs crypton-1.0.6/Crypto/Random/Entropy/Backend.hs
+--- pristine/crypton-1.0.6/Crypto/Random/Entropy/Backend.hs	2001-09-09 10:46:40.000000000 +0900
++++ crypton-1.0.6/Crypto/Random/Entropy/Backend.hs	2026-09-30 10:04:48.102193208 +0900
+@@ -20,6 +20,9 @@
+ #ifdef SUPPORT_RDRAND
+ import Crypto.Random.Entropy.RDRand
+ #endif
++#ifdef CRYPTON_WASI_ENTROPY
++import Crypto.Random.Entropy.WASI
++#endif
+ #ifdef WINDOWS
+ import Crypto.Random.Entropy.Windows
+ #else
+@@ -30,6 +33,9 @@
+ supportedBackends :: [IO (Maybe EntropyBackend)]
+ supportedBackends =
+     [
++#ifdef CRYPTON_WASI_ENTROPY
++    openBackend (Proxy :: Proxy WasiGetEntropy),
++#endif
+ #ifdef SUPPORT_RDRAND
+     openBackend (Proxy :: Proxy RDRand),
+ #endif
+diff --color -ruN -x dist-newstyle pristine/crypton-1.0.6/Crypto/Random/Entropy/WASI.hs crypton-1.0.6/Crypto/Random/Entropy/WASI.hs
+--- pristine/crypton-1.0.6/Crypto/Random/Entropy/WASI.hs	1970-01-01 09:00:00.000000000 +0900
++++ crypton-1.0.6/Crypto/Random/Entropy/WASI.hs	2026-09-30 10:04:48.114373088 +0900
+@@ -0,0 +1,37 @@
++-- |
++-- Module      : Crypto.Random.Entropy.WASI
++-- License     : BSD-style
++-- Stability   : experimental
++-- Portability : WASI only
++--
++-- Entropy from wasi-libc's @getentropy@, i.e. the WASI @random_get@ import.
++-- WASI has no @/dev/urandom@ unless the host preopens one, so the Unix
++-- backend cannot be relied on.
++module Crypto.Random.Entropy.WASI (
++    WasiGetEntropy,
++) where
++
++import Crypto.Random.Entropy.Source
++import Data.Word (Word8)
++import Foreign.C.Types (CInt (..), CSize (..))
++import Foreign.Ptr
++
++data WasiGetEntropy = WasiGetEntropy
++
++foreign import ccall unsafe "getentropy"
++    c_getentropy :: Ptr Word8 -> CSize -> IO CInt
++
++instance EntropySource WasiGetEntropy where
++    entropyOpen = return (Just WasiGetEntropy)
++    entropyGather _ = go 0
++      where
++        -- getentropy is limited to 256 bytes per call
++        go acc ptr n
++            | n <= 0 = return acc
++            | otherwise = do
++                let chunk = min 256 n
++                r <- c_getentropy ptr (fromIntegral chunk)
++                if r /= 0
++                    then return acc
++                    else go (acc + chunk) (ptr `plusPtr` chunk) (n - chunk)
++    entropyClose _ = return ()
+diff --color -ruN -x dist-newstyle pristine/crypton-1.0.6/crypton.cabal crypton-1.0.6/crypton.cabal
+--- pristine/crypton-1.0.6/crypton.cabal	2026-09-30 10:04:19.127435520 +0900
++++ crypton-1.0.6/crypton.cabal	2026-09-30 10:04:48.091315681 +0900
+@@ -429,6 +429,12 @@
+     if flag(use_target_attributes)
+         cc-options: -DWITH_TARGET_ATTRIBUTES
+ 
++    -- WASI: no pthread_exit, and no /dev/urandom without a preopen.
++    if os(wasi)
++        cc-options:    -DARGON2_NO_THREADS
++        cpp-options:   -DCRYPTON_WASI_ENTROPY
++        other-modules: Crypto.Random.Entropy.WASI
++
+ test-suite test-crypton
+     type:             exitcode-stdio-1.0
+     main-is:          Tests.hs

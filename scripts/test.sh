@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-TARGETS=(test-worker test-yesod demo-wai demo-yesod)
+TARGETS=(test-worker test-yesod test-vendor demo-wai demo-yesod)
 
 for target in "${TARGETS[@]}"; do
   scripts/build.sh "$target" ".test-build/$target"
