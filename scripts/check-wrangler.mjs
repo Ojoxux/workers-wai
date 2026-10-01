@@ -174,7 +174,9 @@ const upstreamChecks = [
     upstream.release();
     await sleep(1000);
     const after = workers.log.slice(logBefore);
-    if (/uncaught|exception|error|waitUntil/i.test(after)) p.push(`wrangler logged after release:\n${after}`);
+    // Narrow on purpose: late "unhandled exception" lines from earlier intentional-500 cases
+    // also land in this log; a waitUntil failure logs "waitUntil:" (see the next check).
+    if (/waitUntil:|uncaught/i.test(after)) p.push(`wrangler logged after release:\n${after}`);
   }],
   // Shows that the log check above would see a waitUntil failure.
   ["waitUntil failure is logged", async (p) => {
