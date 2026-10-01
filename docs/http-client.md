@@ -19,9 +19,13 @@ main = do
   print (responseStatus res)
 ```
 
-`fetchManagerSettings` is the same thing as `ManagerSettings`, for when you want
-to adjust a field (say `managerResponseTimeout`) before calling `newManager`.
-Do not override the proxy settings; see below.
+`fetchManagerSettings` is the `ManagerSettings` that `newFetchManager` uses, for
+when you want to adjust a field (say `managerResponseTimeout`) before calling
+`newManager`. Do not override the proxy settings; see below.
+
+Only code that is handed this Manager uses it. `Network.HTTP.Simple` and
+anything else that goes through `http-client-tls`'s global manager use it only
+after `Network.HTTP.Client.TLS.setGlobalManager =<< newFetchManager`.
 
 ## How it works
 
@@ -47,8 +51,8 @@ pure Haskell and has no JavaScript in it.
 | Content-Encoding | `fetch` decodes the body, so the header is dropped before `http-client` sees it (otherwise it would decode again). |
 | Content-Length | Recomputed from the buffered body. `HEAD` responses and 1xx, 204 and 304 responses keep the upstream value and get none if upstream sent none. |
 | Transfer-Encoding, Connection | Dropped from the response; `Connection: close` is added. |
-| Request headers not forwarded | `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Accept-Encoding`, `Expect`, `TE`, `Upgrade`, `Proxy-Connection`. `fetch` sets them itself. |
-| Request target | Percent-encoded for the URL: bytes of 0x80 or above, bytes below 0x21, `#` and `\`. Existing escapes are kept. The URL parser then removes `.` and `..` segments, so `/a/../b` arrives as `/b`. |
+| Request headers not forwarded | Hop-by-hop or fetch-controlled: `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Accept-Encoding`, `Expect`, `TE`, `Upgrade`, `Proxy-Connection`. |
+| Request target | Percent-encoded for the URL: bytes of 0x80 or above, bytes below 0x21, `#` and `\`. Existing escapes are kept. The URL parser then removes `.` and `..` segments, so `/a/../b` arrives as `/b`, and also percent-encodes `"`, `<`, `>`, `` ` ``, `{` and `}` in the path and `'` in the query. |
 | Request body | Content-Length and chunked bodies are both accepted and reassembled. |
 | Bodies | Both are buffered completely in memory. |
 | Proxies | Not supported. |
@@ -59,10 +63,11 @@ pure Haskell and has no JavaScript in it.
   way through reading, is `HttpExceptionRequest _ (ConnectionFailure _)`.
 - A request the bridge cannot send is `HttpExceptionRequest _ (InternalException _)`
   with the reason in the message: a malformed request, headers over 64 KiB, a
-  body over 32 MiB, or `Expect: 100-continue`.
-- `Expect: 100-continue` (exactly that value) is rejected, because `fetch` sends
-  the whole request at once. Any other `Expect` value is not forwarded, and the
-  request is sent.
+  body over 32 MiB, or `Expect: 100-continue`. That exact value is rejected
+  because `fetch` sends the whole request at once; any other `Expect` value is
+  not forwarded and the request is sent.
+- A header value that `fetch` refuses before sending (an invalid one) is a
+  `ConnectionFailure`.
 - A configured proxy, for http and https URLs alike, is refused with
   `InternalException` "http-client-cloudflare does not support proxies".
   Environment proxy variables are ignored.

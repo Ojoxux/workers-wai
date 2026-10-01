@@ -168,19 +168,26 @@ minimal app with the GitHub plugin and checks that `/auth/login` returns 200.
 The OAuth flow needs an HTTP client for the token exchange and the user info
 request, and the stock `http-client` managers cannot connect on Workers. Use the
 `Manager` from `newFetchManager` (package `http-client-cloudflare`, see
-[http-client.md](http-client.md)): build it once, then return it from the app's
-`getHttpManager` or set `authHttpManager`.
+[http-client.md](http-client.md)). yesod-auth's default `authHttpManager` is the
+global manager from `http-client-tls`, which does not work here, so either
+override `authHttpManager`:
 
 ```haskell
 import Network.HTTP.Client.Cloudflare (newFetchManager)
 
 main = runCloudflareWith $ \env -> do
   manager <- newFetchManager
-  toWaiAppPlain (App manager)
+  clientId <- Env.var env "GITHUB_CLIENT_ID"
+  clientSecret <- Env.var env "GITHUB_CLIENT_SECRET"
+  toWaiAppPlain (App manager clientId clientSecret)
 
 instance YesodAuth App where
-  authHttpManager = appHttpManager
+  authHttpManager = getsYesod appHttpManager
+  authPlugins app = [oauth2GitHub (appClientId app) (appClientSecret app)]
 ```
+
+or call `Network.HTTP.Client.TLS.setGlobalManager =<< newFetchManager` once at
+startup, so everything that uses the global manager goes through fetch.
 
 ### Checking GitHub login by hand
 
@@ -189,10 +196,13 @@ an existing app, such as times_ojoxux.
 
 1. Register a GitHub OAuth App. For local dev the callback URL is
    `http://localhost:8787/auth/page/github/callback`.
-2. Put `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and a session key in
-   `.dev.vars`. Never commit that file.
-3. Build the app with `scripts/build.sh <target>`.
-4. Run `wrangler dev`.
+2. Create `worker/.dev.vars` with `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
+   and `SESSION_KEY`, one `NAME=value` per line. wrangler hands them to the
+   Worker, where `Env.var` reads them as above. `.dev.vars` is in
+   `.gitignore`; never commit it.
+3. Build the app with `scripts/build.sh <target>`, which writes
+   `worker/generated/`.
+4. Run `cd worker && npm run dev`.
 5. Open `/auth/login`, follow the GitHub link, approve, and confirm the app
    shows you logged in.
 
