@@ -1,16 +1,16 @@
 // Run test-worker under `wrangler dev` (workerd) and check it over HTTP:
 // the shared table in test/cases.mjs, plus workerd-only checks that need an
 // upstream server (outbound fetch, Set-Cookie passthrough, waitUntil). It also
-// starts test/yesod-wrangler.toml (test-yesod) and checks sessions and CSRF.
+// starts test/yesod-wrangler.toml (test-yesod) and checks sessions and CSRF, and
+// test/vendor-wrangler.toml (test-vendor) and checks the vendored crypto stack.
 //
 //   node scripts/check-wrangler.mjs
 //   SHOW_WRANGLER_LOG=1 node scripts/check-wrangler.mjs   # print the log even on success
 //
-// Requires builds of test-worker and test-yesod in .test-build/ first: run scripts/test.sh, or
-// scripts/build.sh test-worker .test-build/test-worker and
-// scripts/build.sh test-yesod .test-build/test-yesod.
+// Requires builds of test-worker, test-yesod and test-vendor in .test-build/ first: run scripts/test.sh, or
+// scripts/build.sh <target> .test-build/<target> for each.
 //
-// The script starts the upstream from test/harness.mjs and both wranglers itself,
+// The script starts the upstream from test/harness.mjs and the three wranglers itself,
 // and always stops them on exit, failure or Ctrl-C.
 
 import { spawn } from "node:child_process";
@@ -85,15 +85,17 @@ function startWrangler(config, extraArgs, readyPath) {
 
 const workers = startWrangler("test/wrangler.toml", ["--var", `UPSTREAM:${upstream.url}`], "/hello");
 const yesod = startWrangler("test/yesod-wrangler.toml", [], "/count");
+const vendor = startWrangler("test/vendor-wrangler.toml", [], "/vectors");
 await workers.start();
 await yesod.start();
+await vendor.start();
 
 let cleanedUp = false;
 async function cleanup() {
   if (cleanedUp) return;
   cleanedUp = true;
   upstream.release();
-  await Promise.all([workers.stop(), yesod.stop()]);
+  await Promise.all([workers.stop(), yesod.stop(), vendor.stop()]);
   await upstream.close();
 }
 for (const sig of ["SIGINT", "SIGTERM"]) {
@@ -208,6 +210,32 @@ const sessionChecks = [
   }],
 ];
 
+// --- vendored crypto stack against test-vendor (Node covers the same in
+// test/vendor.test.mjs) ----------------------------------------------------
+
+const sendVendor = (path, init) => fetch(`${vendor.base}${path}`, init);
+
+const vendorChecks = [
+  ["vendored crypto and CBOR vectors", async (problems) => {
+    const res = await sendVendor("/vectors");
+    expectEqual(problems, "vectors", await res.text(), "ok 67");
+  }],
+  ["crypton randomness via random_get", async (problems) => {
+    const a = await (await sendVendor("/random")).text();
+    const b = await (await sendVendor("/random")).text();
+    if (!/^[0-9a-f]{64}$/.test(a)) problems.push(`random ${JSON.stringify(a)}`);
+    if (a === b) problems.push("two random draws were equal");
+  }],
+  ["real clientsession round trip", async (problems) => {
+    expectEqual(problems, "clientsession", await (await sendVendor("/clientsession")).text(), "ok");
+  }],
+  ["yesod-auth login page", async (problems) => {
+    const res = await sendVendor("/auth/login");
+    expectEqual(problems, "status", res.status, 200);
+    if (!/\/auth\/page\/github\/forward/.test(await res.text())) problems.push("no GitHub login link");
+  }],
+];
+
 // --- run --------------------------------------------------------------------
 
 let failures = 0;
@@ -221,8 +249,8 @@ function report(name, problems) {
 }
 
 try {
-  await Promise.all([workers.waitReady(), yesod.waitReady()]);
-  console.log(`wrangler dev ready at ${workers.base} and ${yesod.base}, upstream ${upstream.url}\n`);
+  await Promise.all([workers.waitReady(), yesod.waitReady(), vendor.waitReady()]);
+  console.log(`wrangler dev ready at ${workers.base}, ${yesod.base} and ${vendor.base}, upstream ${upstream.url}\n`);
   for (const c of cases) report(c.name, await check(send, c));
   for (const [name, run] of upstreamChecks) {
     const problems = [];
@@ -242,7 +270,16 @@ try {
     }
     report(name, problems);
   }
-  if (/uncaught/i.test(workers.log + yesod.log)) {
+  for (const [name, run] of vendorChecks) {
+    const problems = [];
+    try {
+      await run(problems);
+    } catch (e) {
+      problems.push(`threw ${e?.stack ?? e}`);
+    }
+    report(name, problems);
+  }
+  if (/uncaught/i.test(workers.log + yesod.log + vendor.log)) {
     failures += 1;
     console.log("FAIL wrangler log has an uncaught exception");
   }
@@ -252,7 +289,7 @@ try {
 }
 
 if (failures > 0 || process.env.SHOW_WRANGLER_LOG) {
-  console.log(`\n--- wrangler log (test-worker) ---\n${workers.log}--- wrangler log (test-yesod) ---\n${yesod.log}--- end ---`);
+  console.log(`\n--- wrangler log (test-worker) ---\n${workers.log}--- wrangler log (test-yesod) ---\n${yesod.log}--- wrangler log (test-vendor) ---\n${vendor.log}--- end ---`);
 }
 await cleanup();
 console.log(failures === 0 ? "\nall cases ok" : `\n${failures} case(s) failed`);
