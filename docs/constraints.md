@@ -108,19 +108,59 @@ awaitJS act = do
 
 ## The WASI surface is version- and dependency-dependent
 
-These builds import 20 and 21 `wasi_snapshot_preview1` functions respectively —
-`demo-yesod` additionally needs `path_unlink_file`. Neither imports `random_get`,
-`sched_yield` or `clock_res_get`, all of which a hand-written shim would
-plausibly have guessed at and implemented for nothing.
+The `demo-wai` and `demo-yesod` builds import 20 and 21 `wasi_snapshot_preview1`
+functions respectively — `demo-yesod` additionally needs `path_unlink_file`.
+Neither imports `random_get`, `sched_yield` or `clock_res_get`, all of which a
+hand-written shim would plausibly have guessed at and implemented for nothing.
+The crypto stack changes that: `test-vendor` imports `random_get`, and
+`wasi.mjs` also has `fd_readdir` ahead of the builds that need it (`yesod-auth`,
+through `crypton-x509-system`).
 
 The set moves with the GHC version and with what the dependency tree touches, so
 it must be read off the compiled module rather than assumed. See
 [development.md](development.md).
 
+## Randomness must come from `random_get`
+
+Stock crypton's system entropy backend only opens `/dev/urandom`. There is no
+filesystem, so every random operation (key generation, IVs, nonces) fails. The
+vendored crypton adds a backend that calls `getentropy`, which wasi-libc
+implements with the WASI `random_get` import, and `worker/src/wasi.mjs` backs
+that with `crypto.getRandomValues` in chunks of at most 65,536 bytes. Without
+the vendored crypton, anything that needs a random number fails at run time.
+
+## 32-bit code paths in Hackage packages bit-rot
+
+wasm32 is a 32-bit target, so it takes the `ARCH_32bit` and `CompatPrim64`
+branches that 64-bit platforms never compile. Those had stopped building:
+basement, memory and cborg all needed fixes (see `haskell/vendor/README.md`).
+A patch that compiles proves little about code nobody has run, so the vendored
+packages are trusted only because `haskell/test-vendor` checks them against
+published vectors (RFC 8949, FIPS-197, RFC 4231, RFC 7748) under Node and
+workerd.
+
+## FFI return types must match the C function exactly
+
+On native targets a wrong return type in a `foreign import ccall` is usually
+harmless. wasm-ld checks function signatures: a mismatch is rejected or turned
+into a stub, reported as `function signature mismatch`. The `memcpy` and
+`memset` imports in memory, and the curve25519 and x448 imports in crypton,
+declared a result the C function does not return, and were fixed to match.
+
+## crypton 1.1 and `ram`
+
+crypton 1.1 and later replaced `memory` with `ram`, whose `ByteArrayAccess` is a
+different class. `yesod-auth` 1.6.12.1 and `hoauth2` 2.15 are written against the
+`memory` class and do not compile against it, on any platform. `cabal.project`
+pins `crypton ==1.0.6` and the packages that depend on it (`tls`,
+`crypton-connection`, `crypton-x509`, `hoauth2`, `yesod-auth-oauth2`) to the last
+combination that does. Moving to `ram` is a separate piece of work.
+
 ## No filesystem
 
 `fd_prestat_get` returns `EBADF` for fd 3, which is how libc learns there are no
-preopened directories and stops probing. `stdout` and `stderr` are line-buffered
+preopened directories and stops probing; `fd_readdir` returns `EBADF` for the
+same reason. `stdout` and `stderr` are line-buffered
 into `console.log` and `console.error`; a trailing partial line is dropped, which
 is fine because the RTS only writes there for diagnostics.
 

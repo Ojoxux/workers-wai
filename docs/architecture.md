@@ -25,7 +25,9 @@ haskell/wai-handler-cloudflare runCloudflareWith :: (Env -> IO Application) -> I
         v
 haskell/demo-wai, demo-yesod   WAI / Yesod applications
 haskell/test-worker            one route per cloudflare-workers behaviour
-haskell/shims/*                stand-ins for packages that lack a wasm build
+haskell/test-vendor            checks the vendored crypto stack against published vectors
+haskell/vendor/*               Hackage packages patched to build for wasm
+haskell/shims/*                stand-ins (network, entropy) for packages that lack a wasm build
 ```
 
 ## Request lifecycle

@@ -69,7 +69,9 @@ haskell/test-worker              a Worker that exercises cloudflare-workers, for
 haskell/test-yesod               a Yesod app that exercises the session backend, for the tests
 haskell/demo-wai                 a bare WAI Application
 haskell/demo-yesod               a minimal Yesod application
-haskell/shims/                   stand-ins for packages with no wasm build
+haskell/test-vendor              checks the vendored crypto stack against published vectors
+haskell/vendor/                  Hackage packages patched to build for wasm (crypton, memory, ...)
+haskell/shims/                   stand-ins for packages with no wasm build (network, entropy)
 worker/                          the Cloudflare Worker (JavaScript + WASI shim)
 scripts/                         build, test, inspect and wrangler-check helpers
 ```
@@ -130,7 +132,7 @@ npm run deploy       # wrangler deploy
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | How the Worker, the WASI shim and the Haskell handler fit together, and how a request crosses the FFI boundary |
 | [docs/wai-support.md](docs/wai-support.md) | Which parts of WAI this handler implements, and which it does not |
-| [docs/shims.md](docs/shims.md) | The four replaced packages, why the real ones cannot be built, and how faithful each replacement is |
+| [docs/shims.md](docs/shims.md) | The replaced packages, why the real ones cannot be built, how faithful each replacement is, and how patched packages differ |
 | [docs/constraints.md](docs/constraints.md) | Platform limits and the traps found along the way |
 | [docs/yesod.md](docs/yesod.md) | The steps from a working WAI handler to a running Yesod application |
 | [docs/development.md](docs/development.md) | Inspecting the wasm module and the fast test loop |

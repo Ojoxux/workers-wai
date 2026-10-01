@@ -50,7 +50,8 @@ packages failed initially: `basement`, `ram`, `entropy`, `recv`,
 `streaming-commons` and `http-semantics` all failed for the same reason — a
 `network` stub too thin to satisfy them — and `basement` and `ram` were both
 reachable only through `memory` → `crypton` → `clientsession`. Four shims and one
-cabal flag covered all six. See [shims.md](shims.md).
+cabal flag covered all six at the time; `memory` and `clientsession` have since
+been replaced by the real packages, so two shims remain. See [shims.md](shims.md).
 
 Inspecting the install plan is the quickest way to see who pulls what:
 
@@ -61,9 +62,16 @@ wasm32-wasi-cabal build exe:demo-yesod --dry-run
 That is how `crypton-x509` was traced back to `warp`'s `x509` flag rather than to
 anything Yesod actually wanted.
 
-**4. Use the Workers session backend.** The `clientsession` shim has no
-cryptography, so `defaultClientSessionBackend` cannot work. `yesod-cloudflare`
-provides a backend on WebCrypto AES-256-GCM instead:
+**4. Choose a session backend.** The real `clientsession` now builds, over the
+vendored `crypton`, so yesod-core's `defaultClientSessionBackend` and
+`envClientSessionBackend` work. The key comes from the environment, which
+`makeWorker` fills from the Worker's `env` object: with
+`envClientSessionBackend 120 "SESSION_KEY"`, `SESSION_KEY` holds the base64 of
+96 bytes. `test-yesod` uses this when `SESSION_BACKEND=clientsession`.
+
+`Yesod.Cloudflare.Session` is still the recommendation: it supports key
+rotation and uses WebCrypto AES-256-GCM, which the Workers runtime provides
+natively. It looks like this:
 
 ```haskell
 import Yesod.Cloudflare.Session
@@ -140,6 +148,15 @@ node scripts/inspect-wasm.mjs worker/generated/app.wasm
 shim reports unimplemented imports by name when called, so this would have
 surfaced as a clear log line rather than a mysterious failure — but checking is
 cheaper than debugging.
+
+## yesod-auth
+
+`yesod-auth` and `yesod-auth-oauth2` build and boot; `test-vendor` serves a
+minimal app with the GitHub plugin and checks that `/auth/login` returns 200.
+The OAuth login flow itself does not work yet: the token exchange and the user
+info request need an HTTP client that reaches the network, and `http-client`
+has none on Workers. The planned fix is an `http-client` `Manager` built on
+`fetch`.
 
 ## What works
 

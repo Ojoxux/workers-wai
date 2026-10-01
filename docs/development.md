@@ -26,7 +26,7 @@ fine and then fails with `instance.exports.workerMain is not a function`.
 scripts/test.sh
 ```
 
-Builds `test-worker`, `test-yesod`, `demo-wai` and `demo-yesod` into
+Builds `test-worker`, `test-yesod`, `test-vendor`, `demo-wai` and `demo-yesod` into
 `.test-build/`, then runs `test/*.test.mjs` with Node's test runner. Each test boots a module
 through `worker/src/runtime.mjs` — the same code path as production — with a
 fake `ExecutionContext` and, for outbound fetch, a local HTTP server.
@@ -36,14 +36,17 @@ After the first build, `node --test --test-force-exit --test-timeout=30000
 once a test has loaded `demo-yesod`, whose background threads keep a JS timer
 alive (see [constraints.md](constraints.md)).
 
-Node is not workerd. To check `test-worker` and `test-yesod` against the real
+`test-vendor` is the vendored crypto stack with yesod-auth inside, about 9.8 MiB.
+Its checks are listed in `haskell/vendor/README.md`.
+
+Node is not workerd. To check `test-worker`, `test-yesod` and `test-vendor` against the real
 runtime:
 
 ```sh
 node scripts/check-wrangler.mjs
 ```
 
-It needs builds of `test-worker` and `test-yesod` in `.test-build/` (`scripts/test.sh` makes
+It needs builds of `test-worker`, `test-yesod` and `test-vendor` in `.test-build/` (`scripts/test.sh` makes
 them). The script starts the upstream server from `test/harness.mjs`, runs
 `wrangler dev -c test/wrangler.toml` on a free port with `UPSTREAM` pointing at
 it, waits for `/hello`, and then runs the shared cases in `test/cases.mjs` plus
@@ -54,7 +57,10 @@ prints wrangler's log even when everything passes (it is always printed on
 failure).
 
 It also starts a second instance, `wrangler dev -c test/yesod-wrangler.toml`,
-and runs two session and CSRF checks against it. Each instance gets its own free
+and runs two session and CSRF checks against it. A third instance,
+`wrangler dev -c test/vendor-wrangler.toml` (`test-vendor`), runs 4 checks: the
+vendored crypto and CBOR vectors, randomness through `random_get`, the real
+clientsession round trip, and the yesod-auth login page. Each instance gets its own free
 inspector port and its own `--persist-to` state directory under
 `.wrangler/state/`, because two instances otherwise collide (see
 [constraints.md](constraints.md)).
@@ -104,3 +110,6 @@ writing any shim — see [yesod.md](yesod.md) for how that played out here.
 5. Document the faithfulness of the replacement in the `.cabal` description and
    in [shims.md](shims.md). Whether a shim is real or fictional is the single
    most important thing to record about it.
+
+If the real package only needs a patch to build, vendor it instead of shimming
+it: see `haskell/vendor/README.md`.
