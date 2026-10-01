@@ -269,14 +269,15 @@ getClientSessionR = liftIO $ do
 -- http-client exception becomes "exception <constructor> <details>".
 --
 -- Query: url (required), method, body, mode=chunked, contentType, accept,
--- basic=user:pass, redirects (redirect count), expect=1.
+-- basic=user:pass, redirects (redirect count), expect (Expect header value), rawPath,
+-- proxy=1.
 getHttpR :: Handler Text
 getHttpR = do
   App defaultManager <- getYesod
   params <- reqGetParams <$> getRequest
   let param k = lookup k params
   -- proxy: an http-client proxy in front of the fetch Manager, which the
-  -- bridge must refuse (it only speaks origin-form).
+  -- bridge must refuse for http and https URLs alike.
   manager <- case param "proxy" of
     Just _ -> liftIO (newManager (managerSetProxy (useProxy (Proxy "127.0.0.1" 9)) fetchManagerSettings))
     Nothing -> pure defaultManager
@@ -299,7 +300,7 @@ getHttpR = do
             , requestHeaders =
                 headerFor "Content-Type" "contentType"
                   <> headerFor "Accept" "accept"
-                  <> maybe [] (const [("Expect", "100-continue")]) (param "expect")
+                  <> headerFor "Expect" "expect"
             , redirectCount = fromMaybe 10 (readMaybe . T.unpack =<< param "redirects")
             }
       -- rawPath: set the path verbatim, bypassing parseRequest's escaping.

@@ -45,6 +45,9 @@ export function fakeCtx() {
  *   /gzip        -> 200 "hello gzip", gzip-compressed (Content-Encoding: gzip).
  *   /sized       -> 200 "0123456789" with Content-Length: 10 (a HEAD gets the
  *                   header but no body).
+ *   /broken-body -> 200 with Content-Length: 100, a few bytes, then the socket
+ *                   is destroyed (the body read fails after the headers).
+ *   /not-modified -> 304 with Content-Length: 5 and no body.
  * Every request is recorded in `hits`.
  */
 export function startUpstream() {
@@ -74,6 +77,16 @@ export function startUpstream() {
     if (req.url === "/sized") {
       res.writeHead(200, { "content-type": "text/plain", "content-length": "10" });
       res.end("0123456789");
+      return;
+    }
+    if (req.url === "/broken-body") {
+      res.writeHead(200, { "content-type": "text/plain", "content-length": "100" });
+      res.write("abc", () => res.socket.destroy());
+      return;
+    }
+    if (req.url === "/not-modified") {
+      res.writeHead(304, { "content-length": "5" });
+      res.end();
       return;
     }
     if (req.url === "/echo") {

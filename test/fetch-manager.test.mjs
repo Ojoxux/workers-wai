@@ -92,7 +92,7 @@ test("a failed fetch is an HttpException ConnectionFailure", async () => {
 });
 
 test("Expect: 100-continue is rejected with a clear message", async () => {
-  const q = new URLSearchParams({ url: `${upstream.url}/echo-all`, method: "POST", body: "x", expect: "1" }).toString();
+  const q = new URLSearchParams({ url: `${upstream.url}/echo-all`, method: "POST", body: "x", expect: "100-continue" }).toString();
   const r = await worker.fetch(new Request(`${BASE}/http?${q}`), {}, fakeCtx().ctx);
   assert.match(await r.text(), /^exception InternalException.*100-continue/s);
 });
@@ -130,4 +130,46 @@ test("an empty-body POST arrives as a POST with an empty body", async () => {
   const seen = JSON.parse(r.body);
   assert.equal(seen.method, "POST");
   assert.equal(seen.body, "");
+});
+
+/** Runs one http-client request inside the Worker; returns the raw summary text. */
+async function httpText(params) {
+  const q = new URLSearchParams(params).toString();
+  return (await worker.fetch(new Request(`${BASE}/http?${q}`), {}, fakeCtx().ctx)).text();
+}
+
+test("a failure while reading the response body is an HttpException ConnectionFailure", async () => {
+  assert.match(await httpText({ url: `${upstream.url}/broken-body` }), /^exception ConnectionFailure/);
+});
+
+test("# and \\ in a raw path are percent-encoded, not taken as fragment or separator", async () => {
+  const hashed = await http({ url: upstream.url, rawPath: "/echo-all?q=a#b" });
+  assert.equal(JSON.parse(hashed.body).url, "/echo-all?q=a%23b");
+  const slashed = await http({ url: upstream.url, rawPath: "/echo-all?q=a\\b" });
+  assert.equal(JSON.parse(slashed.body).url, "/echo-all?q=a%5Cb");
+});
+
+test("an https request through a proxy is rejected with a clear message", async () => {
+  const text = await httpText({ url: "https://127.0.0.1:1/", proxy: "1" });
+  assert.match(text, /^exception InternalException.*does not support proxies/s);
+});
+
+test("only an Expect value of exactly 100-continue is rejected", async () => {
+  const r = await http({ url: `${upstream.url}/echo-all`, method: "POST", body: "x", expect: "100-Continue" });
+  assert.equal(r.status, "200");
+  assert.equal(JSON.parse(r.body).body, "x");
+});
+
+test("a 204 response gets no Content-Length and an empty body", async () => {
+  const r = await http({ url: `${upstream.url}/status/204` });
+  assert.equal(r.status, "204");
+  assert.ok(!r.headers.some((h) => h.startsWith("content-length")), r.headers.join("\n"));
+  assert.equal(r.body, "");
+});
+
+test("a 304 response keeps the upstream Content-Length and has an empty body", async () => {
+  const r = await http({ url: `${upstream.url}/not-modified` });
+  assert.equal(r.status, "304");
+  assert.ok(r.headers.includes("content-length: 5"), r.headers.join("\n"));
+  assert.equal(r.body, "");
 });

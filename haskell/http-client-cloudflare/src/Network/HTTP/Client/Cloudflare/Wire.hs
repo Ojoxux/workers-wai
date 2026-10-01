@@ -21,7 +21,7 @@ import qualified Data.ByteString.Char8   as BC
 import qualified Data.ByteString.Lazy    as BL
 import qualified Data.CaseInsensitive    as CI
 import           Data.Bits               (shiftR, (.&.))
-import           Data.Char               (digitToInt, isHexDigit, toLower)
+import           Data.Char               (digitToInt, isHexDigit)
 import           Data.Word               (Word8)
 import           Network.HTTP.Types      (Header, HeaderName)
 
@@ -67,10 +67,12 @@ parseRequest raw = do
     then Left "request target is not origin-form; http-client-cloudflare does not support proxies"
     else pure ()
   headers <- traverse parseHeader headerLines
-  case lookup "expect" (lower headers) of
-    Just e | "100-continue" `B.isInfixOf` BC.map toLower e ->
-      Left "Expect: 100-continue is not supported (fetch sends the whole request at once)"
-    _ -> pure ()
+  -- The same test http-client applies: only this exact value makes it wait
+  -- for a 100 before sending the body. Any other value is not an error
+  -- (the header itself is never forwarded to fetch).
+  if lookup "expect" (lower headers) == Just "100-continue"
+    then Left "Expect: 100-continue is not supported (fetch sends the whole request at once)"
+    else pure ()
   body <- case lookup "transfer-encoding" (lower headers) of
     Just te | "chunked" `B.isInfixOf` te -> dechunk afterHead
     _ -> case lookup "content-length" (lower headers) of
@@ -130,13 +132,19 @@ dechunk = go mempty 0
 
 -- | A request target as URL text for fetch: bytes that cannot appear
 -- literally in a URL (controls, space, and anything >= 0x80) are
--- percent-encoded byte by byte; existing escapes are left alone.
+-- percent-encoded byte by byte, as are @#@ and @\\@, which the URL parser
+-- would otherwise take as the start of a fragment and as a path separator.
+-- Existing escapes are left alone.
+--
+-- The result is still parsed as a URL, so @.@ and @..@ path segments are
+-- normalised away before the request is sent (@/a/../b@ arrives as @/b@).
 encodeTarget :: B.ByteString -> B.ByteString
 encodeTarget = BL.toStrict . BB.toLazyByteString . B.foldr (\w acc -> enc w <> acc) mempty
   where
     enc :: Word8 -> BB.Builder
     enc w
-      | w >= 0x80 || w < 0x21 = BB.char7 '%' <> hex (w `shiftR` 4) <> hex (w .&. 0x0f)
+      | w >= 0x80 || w < 0x21 || w == 0x23 || w == 0x5c =
+          BB.char7 '%' <> hex (w `shiftR` 4) <> hex (w .&. 0x0f)
       | otherwise = BB.word8 w
     hex n = BB.word8 (B.index "0123456789ABCDEF" (fromIntegral n))
 
