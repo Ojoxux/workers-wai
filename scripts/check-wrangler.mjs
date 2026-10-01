@@ -2,7 +2,8 @@
 // the shared table in test/cases.mjs, plus workerd-only checks that need an
 // upstream server (outbound fetch, Set-Cookie passthrough, waitUntil). It also
 // starts test/yesod-wrangler.toml (test-yesod) and checks sessions and CSRF, and
-// test/vendor-wrangler.toml (test-vendor) and checks the vendored crypto stack.
+// test/vendor-wrangler.toml (test-vendor) and checks the vendored crypto stack and
+// http-client's Manager over fetch (GET, form POST, redirects, gzip, failures).
 //
 //   node scripts/check-wrangler.mjs
 //   SHOW_WRANGLER_LOG=1 node scripts/check-wrangler.mjs   # print the log even on success
@@ -240,6 +241,45 @@ const vendorChecks = [
   }],
 ];
 
+// --- http-client over fetch (Node covers the same in test/fetch-manager.test.mjs)
+
+async function viaManager(params) {
+  const res = await sendVendor(`/http?${new URLSearchParams(params)}`);
+  const text = await res.text();
+  const [head, ...rest] = text.split("\n\n");
+  const [status, ...headers] = head.split("\n");
+  return { http: res.status, text, status, headers, body: rest.join("\n\n") };
+}
+
+const managerChecks = [
+  ["manager GET", async (p) => {
+    const r = await viaManager({ url: `${upstream.url}/echo-all` });
+    expectEqual(p, "status", r.status, "200");
+    if (r.status === "200") expectEqual(p, "method", JSON.parse(r.body).method, "GET");
+  }],
+  ["manager form POST", async (p) => {
+    const r = await viaManager({ url: `${upstream.url}/echo-all`, method: "POST", contentType: "application/x-www-form-urlencoded", body: "a=1&b=2" });
+    if (r.status !== "200") return p.push(r.text);
+    expectEqual(p, "body", JSON.parse(r.body).body, "a=1&b=2");
+  }],
+  ["manager leaves redirects to http-client", async (p) => {
+    const r = await viaManager({ url: `${upstream.url}/redirect`, redirects: "0" });
+    expectEqual(p, "status", r.status, "302");
+  }],
+  ["manager decompresses gzip once", async (p) => {
+    const r = await viaManager({ url: `${upstream.url}/gzip` });
+    expectEqual(p, "body", r.body, "hello gzip");
+  }],
+  ["manager wraps fetch failures", async (p) => {
+    const r = await viaManager({ url: "http://127.0.0.1:1/" });
+    if (!/^exception ConnectionFailure/.test(r.text)) p.push(r.text);
+  }],
+  ["manager wraps body-read failures", async (p) => {
+    const r = await viaManager({ url: `${upstream.url}/broken-body` });
+    if (!/^exception ConnectionFailure/.test(r.text)) p.push(r.text);
+  }],
+];
+
 // --- run --------------------------------------------------------------------
 
 let failures = 0;
@@ -275,6 +315,15 @@ try {
     report(name, problems);
   }
   for (const [name, run] of vendorChecks) {
+    const problems = [];
+    try {
+      await run(problems);
+    } catch (e) {
+      problems.push(`threw ${e?.stack ?? e}`);
+    }
+    report(name, problems);
+  }
+  for (const [name, run] of managerChecks) {
     const problems = [];
     try {
       await run(problems);
