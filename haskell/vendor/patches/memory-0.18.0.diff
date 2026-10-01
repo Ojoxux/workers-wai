@@ -1,0 +1,58 @@
+diff --color -ruN -x dist-newstyle pristine/memory-0.18.0/Data/Memory/Internal/CompatPrim64.hs memory-0.18.0/Data/Memory/Internal/CompatPrim64.hs
+--- pristine/memory-0.18.0/Data/Memory/Internal/CompatPrim64.hs	2022-09-05 10:50:01.000000000 +0900
++++ memory-0.18.0/Data/Memory/Internal/CompatPrim64.hs	2026-09-30 10:01:52.299017205 +0900
+@@ -150,6 +150,10 @@
+ w64# w _ _ = w
+ 
+ #elif WORD_SIZE_IN_BITS == 32
++#if __GLASGOW_HASKELL__ >= 904
++-- GHC.IntWord64 is gone; the 64-bit primops live in GHC.Prim.
++import GHC.Prim
++#else
+ import GHC.IntWord64
+ import GHC.Prim (Word#)
+ 
+@@ -158,6 +162,7 @@
+     let !ai = word64ToInt64# a
+         !bi = word64ToInt64# b
+      in int64ToWord64# (timesInt64# ai bi)
++#endif
+ 
+ w64# :: Word# -> Word# -> Word# -> Word64#
+ w64# _ hw lw =
+diff --color -ruN -x dist-newstyle pristine/memory-0.18.0/Data/Memory/PtrMethods.hs memory-0.18.0/Data/Memory/PtrMethods.hs
+--- pristine/memory-0.18.0/Data/Memory/PtrMethods.hs	2020-01-07 17:21:18.000000000 +0900
++++ memory-0.18.0/Data/Memory/PtrMethods.hs	2026-09-30 10:02:19.189426556 +0900
+@@ -63,7 +63,7 @@
+ 
+ -- | Copy a set number of bytes from @src to @dst
+ memCopy :: Ptr Word8 -> Ptr Word8 -> Int -> IO ()
+-memCopy dst src n = c_memcpy dst src (fromIntegral n)
++memCopy dst src n = c_memcpy dst src (fromIntegral n) >>= \_ -> return ()
+ {-# INLINE memCopy #-}
+ 
+ -- | Set @n number of bytes to the same value @v
+@@ -114,7 +114,7 @@
+             loop (i+1) (acc .|. e)
+ 
+ foreign import ccall unsafe "memset"
+-    c_memset :: Ptr Word8 -> Word8 -> CSize -> IO ()
++    c_memset :: Ptr Word8 -> Word8 -> CSize -> IO (Ptr Word8)
+ 
+ foreign import ccall unsafe "memcpy"
+-    c_memcpy :: Ptr Word8 -> Ptr Word8 -> CSize -> IO ()
++    c_memcpy :: Ptr Word8 -> Ptr Word8 -> CSize -> IO (Ptr Word8)
+diff --color -ruN -x dist-newstyle pristine/memory-0.18.0/memory.cabal memory-0.18.0/memory.cabal
+--- pristine/memory-0.18.0/memory.cabal	2026-09-30 09:59:23.860514961 +0900
++++ memory-0.18.0/memory.cabal	2026-09-30 09:59:42.219051594 +0900
+@@ -85,7 +85,9 @@
+   if os(windows)
+     Other-modules:   Data.Memory.MemMap.Windows
+   else
+-    Other-modules:   Data.Memory.MemMap.Posix
++    -- WASI has no mmap. The module is internal and imported by nothing.
++    if !os(wasi)
++      Other-modules:   Data.Memory.MemMap.Posix
+ 
+   -- optional support bytearray instance for bytestring
+   if flag(support_bytestring)

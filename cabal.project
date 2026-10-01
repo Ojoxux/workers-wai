@@ -7,7 +7,6 @@
 --                  operations that fail loudly. Also unblocks recv,
 --                  streaming-commons, http-semantics, http2, warp, wai-extra.
 --   entropy        real: backed by the host's crypto.getRandomValues.
---   memory         real: constEq reimplemented as constant-time comparison.
 --   clientsession  fictional: no AES/Skein. Applications use
 --                   Yesod.Cloudflare.Session (yesod-cloudflare) instead.
 packages:
@@ -18,9 +17,14 @@ packages:
   haskell/demo-yesod
   haskell/test-worker
   haskell/test-yesod
+  haskell/test-vendor
   haskell/shims/network
   haskell/shims/entropy
-  haskell/shims/memory
+  haskell/vendor/basement-0.0.16
+  haskell/vendor/memory-0.18.0
+  haskell/vendor/cborg-0.2.10.0
+  haskell/vendor/crypton-1.0.6
+  haskell/vendor/xml-conduit-1.10.1.0
   haskell/shims/clientsession
 
 -- warp's `x509` flag defaults on and pulls in crypton-x509 -> crypton -> ram,
@@ -29,3 +33,17 @@ packages:
 -- upstream, so nothing is lost.
 package warp
   flags: -x509
+
+-- haskell/vendor holds Hackage packages patched to build for wasm32-wasi; see
+-- haskell/vendor/README.md.
+--
+-- crypton >= 1.1 moved from `memory` to `ram`, whose ByteArrayAccess is a
+-- different class, so yesod-auth 1.6.12.1 and hoauth2 2.15 do not compile
+-- against it on any platform. Pin the last combination that does.
+constraints:
+  crypton ==1.0.6,
+  tls ==2.1.8,
+  crypton-connection ==0.4.5,
+  crypton-x509 ==1.7.7,
+  hoauth2 ==2.14.3,
+  yesod-auth-oauth2 ==0.7.4.0

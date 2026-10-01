@@ -1,0 +1,202 @@
+diff --color -ruN -x dist-newstyle pristine/cborg-0.2.10.0/src/Codec/CBOR/Decoding.hs cborg-0.2.10.0/src/Codec/CBOR/Decoding.hs
+--- pristine/cborg-0.2.10.0/src/Codec/CBOR/Decoding.hs	2001-09-09 10:46:40.000000000 +0900
++++ cborg-0.2.10.0/src/Codec/CBOR/Decoding.hs	2026-09-30 09:53:38.573304018 +0900
+@@ -423,7 +423,7 @@
+ #if defined(ARCH_64bit)
+   Decoder (\k -> return (ConsumeWord (\w# -> k (toWord64 w#))))
+ #else
+-  Decoder (\k -> return (ConsumeWord64 (\w64# -> k (toWord64 w64#))))
++  Decoder (\k -> return (ConsumeWord64 (\w64# -> k (W64# w64#))))
+ #endif
+ 
+ -- | Decode a negative 'Word'.
+@@ -442,7 +442,7 @@
+ #if defined(ARCH_64bit)
+   Decoder (\k -> return (ConsumeNegWord (\w# -> k (toWord64 w#))))
+ #else
+-  Decoder (\k -> return (ConsumeNegWord64 (\w64# -> k (toWord64 w64#))))
++  Decoder (\k -> return (ConsumeNegWord64 (\w64# -> k (W64# w64#))))
+ #endif
+ 
+ -- | Decode an 'Int'.
+@@ -482,7 +482,7 @@
+ #if defined(ARCH_64bit)
+   Decoder (\k -> return (ConsumeInt (\n# -> k (toInt64 n#))))
+ #else
+-  Decoder (\k -> return (ConsumeInt64 (\n64# -> k (toInt64 n64#))))
++  Decoder (\k -> return (ConsumeInt64 (\n64# -> k (I64# n64#))))
+ #endif
+ 
+ -- | Decode canonical representation of a 'Word'.
+@@ -522,7 +522,7 @@
+ #if defined(ARCH_64bit)
+   Decoder (\k -> return (ConsumeWordCanonical (\w# -> k (toWord64 w#))))
+ #else
+-  Decoder (\k -> return (ConsumeWord64Canonical (\w64# -> k (toWord64 w64#))))
++  Decoder (\k -> return (ConsumeWord64Canonical (\w64# -> k (W64# w64#))))
+ #endif
+ 
+ -- | Decode canonical representation of a negative 'Word'.
+@@ -541,7 +541,7 @@
+ #if defined(ARCH_64bit)
+   Decoder (\k -> return (ConsumeNegWordCanonical (\w# -> k (toWord64 w#))))
+ #else
+-  Decoder (\k -> return (ConsumeNegWord64Canonical (\w64# -> k (toWord64 w64#))))
++  Decoder (\k -> return (ConsumeNegWord64Canonical (\w64# -> k (W64# w64#))))
+ #endif
+ 
+ -- | Decode canonical representation of an 'Int'.
+@@ -581,7 +581,7 @@
+ #if defined(ARCH_64bit)
+   Decoder (\k -> return (ConsumeIntCanonical (\n# -> k (toInt64 n#))))
+ #else
+-  Decoder (\k -> return (ConsumeInt64Canonical (\n64# -> k (toInt64 n64#))))
++  Decoder (\k -> return (ConsumeInt64Canonical (\n64# -> k (I64# n64#))))
+ #endif
+ 
+ -- | Decode an 'Integer'.
+@@ -986,7 +986,9 @@
+ -- @since 0.2.2.0
+ peekByteOffset :: Decoder s ByteOffset
+ peekByteOffset = Decoder (\k -> return (PeekByteOffset (\off# -> k (I64#
+-#if MIN_VERSION_base(4,17,0)
++#if defined(ARCH_32bit)
++        off#
++#elif MIN_VERSION_base(4,17,0)
+         (intToInt64# off#)
+ #else
+         off#
+diff --color -ruN -x dist-newstyle pristine/cborg-0.2.10.0/src/Codec/CBOR/Magic.hs cborg-0.2.10.0/src/Codec/CBOR/Magic.hs
+--- pristine/cborg-0.2.10.0/src/Codec/CBOR/Magic.hs	2001-09-09 10:46:40.000000000 +0900
++++ cborg-0.2.10.0/src/Codec/CBOR/Magic.hs	2026-09-30 09:53:58.917612220 +0900
+@@ -120,7 +120,7 @@
+ import           Data.Bits ((.|.), unsafeShiftL)
+ #endif
+ 
+-#if defined(ARCH_32bit)
++#if defined(ARCH_32bit) && !MIN_VERSION_ghc_prim(0,8,0)
+ import           GHC.IntWord64 (wordToWord64#, word64ToWord#,
+                                 intToInt64#, int64ToInt#,
+                                 leWord64#, ltWord64#, word64ToInt64#)
+@@ -484,7 +484,7 @@
+ word32ToInt (W32# w#) = I# (word2Int# (word32ToWord# w#))
+ #else
+ word32ToInt (W32# w#) =
+-  case isTrue# (w# `ltWord#` 0x80000000##) of
++  case isTrue# (word32ToWord# w# `ltWord#` 0x80000000##) of
+     True  -> Just (I# (word2Int# (word32ToWord# w#)))
+     False -> Nothing
+ #endif
+@@ -529,18 +529,30 @@
+ {-# INLINE word32ToInt #-}
+ {-# INLINE word64ToInt #-}
+ 
+-#if defined(ARCH_32bit)
++#if defined(ARCH_32bit) && MIN_VERSION_ghc_prim(0,8,0)
++word8ToInt64  (W8#  w#) = I64# (intToInt64# (word2Int# (word8ToWord# w#)))
++word16ToInt64 (W16# w#) = I64# (intToInt64# (word2Int# (word16ToWord# w#)))
++word32ToInt64 (W32# w#) = I64# (word64ToInt64# (wordToWord64# (word32ToWord# w#)))
++#elif defined(ARCH_32bit)
+ word8ToInt64  (W8#  w#) = I64# (intToInt64# (word2Int# w#))
+ word16ToInt64 (W16# w#) = I64# (intToInt64# (word2Int# w#))
+ word32ToInt64 (W32# w#) = I64# (word64ToInt64# (wordToWord64# w#))
++#endif
++#if defined(ARCH_32bit)
+ word64ToInt64 (W64# w#) =
+   case isTrue# (w# `ltWord64#` uncheckedShiftL64# (wordToWord64# 1##) 63#) of
+     True  -> Just (I64# (word64ToInt64# w#))
+     False -> Nothing
+ 
++#if MIN_VERSION_ghc_prim(0,8,0)
++word8ToWord64  (W8#  w#) = W64# (wordToWord64# (word8ToWord# w#))
++word16ToWord64 (W16# w#) = W64# (wordToWord64# (word16ToWord# w#))
++word32ToWord64 (W32# w#) = W64# (wordToWord64# (word32ToWord# w#))
++#else
+ word8ToWord64  (W8#  w#) = W64# (wordToWord64# w#)
+ word16ToWord64 (W16# w#) = W64# (wordToWord64# w#)
+ word32ToWord64 (W32# w#) = W64# (wordToWord64# w#)
++#endif
+ 
+ {-# INLINE word8ToInt64  #-}
+ {-# INLINE word16ToInt64 #-}
+diff --color -ruN -x dist-newstyle pristine/cborg-0.2.10.0/src/Codec/CBOR/Read.hs cborg-0.2.10.0/src/Codec/CBOR/Read.hs
+--- pristine/cborg-0.2.10.0/src/Codec/CBOR/Read.hs	2001-09-09 10:46:40.000000000 +0900
++++ cborg-0.2.10.0/src/Codec/CBOR/Read.hs	2026-09-30 09:54:48.839733491 +0900
+@@ -63,7 +63,7 @@
+ import qualified Data.Text.Encoding as T
+ import           Data.Word
+ import           GHC.Word
+-#if defined(ARCH_32bit)
++#if defined(ARCH_32bit) && !MIN_VERSION_ghc_prim(0,8,0)
+ import           GHC.IntWord64
+ #endif
+ import           GHC.Exts
+@@ -1271,7 +1271,9 @@
+ 
+     SlowPeekByteOffset bs' k ->
+       lift
+-#if MIN_VERSION_base(4,17,0)
++#if defined(ARCH_32bit)
++        (k off#)
++#elif MIN_VERSION_base(4,17,0)
+         (k (int64ToInt# off#))
+ #else
+         (k off#)
+@@ -1381,7 +1383,9 @@
+       SlowPeekByteOffset bs_empty k ->
+         assert (BS.null bs_empty) $ do
+         lift
+-#if MIN_VERSION_base(4,17,0)
++#if defined(ARCH_32bit)
++          (k off#)
++#elif MIN_VERSION_base(4,17,0)
+           (k (int64ToInt# off#))
+ #else
+           (k off#)
+@@ -1565,19 +1569,19 @@
+ {-# INLINE isWord64Canonical #-}
+ isWord64Canonical :: Int -> Word64 -> Bool
+ isWord64Canonical sz w
+-  | sz == 2   = w > 0x17)
+-  | sz == 3   = w > 0xff)
+-  | sz == 5   = w > 0xffff)
+-  | sz == 9   = w > 0xffffffff)
++  | sz == 2   = w > 0x17
++  | sz == 3   = w > 0xff
++  | sz == 5   = w > 0xffff
++  | sz == 9   = w > 0xffffffff
+   | otherwise = True
+ 
+ {-# INLINE isInt64Canonical #-}
+-isInt64Canonical :: Int -> Int64# -> Bool
+-isInt64Canonical sz i#
+-  | isTrue# (i# `ltInt64#` intToInt64# 0#) = isWord64Canonical sz (not64# w#)
+-  | otherwise                              = isWord64Canonical sz         w#
++isInt64Canonical :: Int -> Int64 -> Bool
++isInt64Canonical sz i
++  | i < 0     = isWord64Canonical sz (complement w)
++  | otherwise = isWord64Canonical sz            w
+   where
+-    w# = int64ToWord64# i#
++    w = case i of I64# i# -> W64# (int64ToWord64# i#)
+ #endif
+ 
+ {-# INLINE isSimpleCanonical #-}
+@@ -1796,7 +1800,7 @@
+   0x1b -> let !w = eatTailWord64 bs
+               sz = 9
+ #if defined(ARCH_32bit)
+-          in DecodedToken sz (BigIntToken (isWord64Canonical sz (word64ToWord w)) $! toInteger w)
++          in DecodedToken sz (BigIntToken (isWord64Canonical sz w) $! toInteger w)
+ #else
+           in DecodedToken sz (BigIntToken (isWordCanonical sz (word64ToWord w))   $! toInteger w)
+ #endif
+@@ -1838,7 +1842,7 @@
+   0x3b -> let !w = eatTailWord64 bs
+               sz = 9
+ #if defined(ARCH_32bit)
+-          in DecodedToken sz (BigIntToken (isWord64Canonical sz (word64ToWord w)) $! (-1 - toInteger w))
++          in DecodedToken sz (BigIntToken (isWord64Canonical sz w) $! (-1 - toInteger w))
+ #else
+           in DecodedToken sz (BigIntToken (isWordCanonical sz (word64ToWord w))   $! (-1 - toInteger w))
+ #endif
