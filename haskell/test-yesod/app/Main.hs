@@ -7,6 +7,10 @@
 
 -- | A Yesod app that exercises Yesod.Cloudflare.Session, one route per
 -- behaviour. Driven by test/session.test.mjs; not an example to copy.
+--
+-- SESSION_BACKEND=clientsession switches to yesod-core's
+-- envClientSessionBackend (driven by test/clientsession.test.mjs); otherwise
+-- cloudflareSessionBackend.
 module Main (main) where
 
 import qualified Cloudflare.Workers.Env         as Env
@@ -55,8 +59,12 @@ foreign export javascript "workerMain" main :: IO ()
 
 main :: IO ()
 main = runCloudflareWith $ \env -> do
-  current <- Env.var env "SESSION_KEY"
-  old <- Env.lookupVar env "SESSION_KEY_OLD"
-  minutes <- maybe 120 (read . T.unpack) <$> Env.lookupVar env "SESSION_MINUTES"
-  backend <- cloudflareSessionBackend (SessionKeys current (maybeToList old)) minutes
+  kind <- Env.lookupVar env "SESSION_BACKEND"
+  backend <- case kind of
+    Just "clientsession" -> envClientSessionBackend 120 "SESSION_KEY"
+    _ -> do
+      current <- Env.var env "SESSION_KEY"
+      old <- Env.lookupVar env "SESSION_KEY_OLD"
+      minutes <- maybe 120 (read . T.unpack) <$> Env.lookupVar env "SESSION_MINUTES"
+      cloudflareSessionBackend (SessionKeys current (maybeToList old)) minutes
   toWaiAppPlain (App backend)
