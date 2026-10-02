@@ -136,11 +136,65 @@ route env req ctx =
         , D1.D1Blob (B.pack [0, 255, 16])
         , D1.D1Null
         ]
-      res <- D1.query db (D1.Statement "SELECT i, j, r, s, b, n FROM vals" [])
-      pure . ok $
-        T.intercalate "," (D1.columnNames res)
-          <> "\n"
-          <> T.intercalate "\n" (map (T.unwords . map renderD1) (D1.rows res))
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT i, j, r, s, b, n FROM vals" [])
+    ["d1", "empty"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS vals (i INTEGER, j INTEGER, r REAL, s TEXT, b BLOB, n INTEGER)" []
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT i FROM vals WHERE 0" [])
+    ["d1", "real-one"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS reals (r REAL)" []
+      exec db "DELETE FROM reals" []
+      exec db "INSERT INTO reals VALUES (?)" [D1.D1Real 1.0]
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT r FROM reals" [])
+    ["d1", "read-overflow"] -> do
+      db <- D1.d1 env "DB"
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT 9007199254740993" [])
+    ["d1", "empty-batch"] -> do
+      db <- D1.d1 env "DB"
+      rs <- D1.batch db []
+      pure (ok (T.intercalate "," (map (T.pack . show . D1.changes) rs)))
+    ["d1", "not-d1"] -> do
+      _ <- D1.d1 env "GREETING"
+      pure (ok "unreachable")
+    ["d1", "text"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS texts (k INTEGER, s TEXT)" []
+      exec db "DELETE FROM texts" []
+      exec db "INSERT INTO texts VALUES (1, ?), (2, ?)" [D1.D1Text "😀 héllo", D1.D1Text "a\0b"]
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT s FROM texts ORDER BY k" [])
+    ["d1", "blobs"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS blobs (k INTEGER, b BLOB)" []
+      exec db "DELETE FROM blobs" []
+      let big = B.pack (map fromIntegral [0 .. 65535 :: Int])
+      exec db "INSERT INTO blobs VALUES (1, ?), (2, ?)" [D1.D1Blob B.empty, D1.D1Blob big]
+      res <- D1.query db (D1.Statement "SELECT b FROM blobs ORDER BY k" [])
+      let describe = \case
+            [D1.D1Blob b] -> "blob " <> T.pack (show (B.length b)) <> " " <> T.pack (show (b == B.take (B.length b) big))
+            other -> T.pack (show (map (T.take 40 . renderD1) other))
+      pure (ok (T.intercalate "\n" (map describe (D1.rows res))))
+    ["d1", "rows"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS multi (k INTEGER, v TEXT)" []
+      exec db "DELETE FROM multi" []
+      exec db "INSERT INTO multi VALUES (2, 'b'), (3, 'c'), (1, 'a')" []
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT k, v FROM multi ORDER BY k" [])
+    ["d1", "bind-count"] -> do
+      db <- D1.d1 env "DB"
+      _ <- D1.query db (D1.Statement "SELECT ?, ?" [D1.D1Integer 1])
+      pure (ok "unreachable")
+    ["d1", "rowid-range", how] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS bigids (id INTEGER PRIMARY KEY, v TEXT)" []
+      exec db "DELETE FROM bigids" []
+      let ins = D1.Statement "INSERT INTO bigids (id, v) VALUES (9007199254740993, 'x')" []
+      rs <- if how == "batch" then D1.batch db [ins] else pure <$> D1.execute db ins
+      pure (ok (T.intercalate "," (map (T.pack . show . D1.lastRowId) rs)))
+    ["d1", "nonfinite", which] -> do
+      db <- D1.d1 env "DB"
+      let x = if which == "nan" then 0 / 0 else 1 / 0 :: Double
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT ?" [D1.D1Real x])
     ["d1", "too-big"] -> do
       db <- D1.d1 env "DB"
       _ <- D1.query db (D1.Statement "SELECT ?" [D1.D1Integer 9007199254740992])
@@ -226,3 +280,9 @@ renderD1 = \case
   D1.D1Real x -> "real:" <> T.pack (show x)
   D1.D1Text t -> "text:" <> t
   D1.D1Blob b -> "blob:" <> toHex b
+
+renderRows :: D1.D1Rows -> Text
+renderRows res =
+  T.intercalate "," (D1.columnNames res)
+    <> "\n"
+    <> T.intercalate "\n" (map (T.unwords . map renderD1) (D1.rows res))

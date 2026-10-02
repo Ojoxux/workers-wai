@@ -8,11 +8,27 @@
 -- D1Rows cols rs <- query db (Statement \"SELECT id, name FROM users WHERE id = ?\" [D1Integer 1])
 -- @
 --
--- Values cross as JavaScript values, so integers are exact only within
--- ±(2^53 − 1): binding or reading one outside that range throws
--- 'D1Exception' instead of silently rounding. JavaScript numbers do not
--- distinguish integers from reals, so a REAL column holding @1.0@ comes back
--- as @D1Integer 1@.
+-- Values cross as JavaScript values, which has these consequences:
+--
+-- * Integers are exact only within ±(2^53 − 1). Binding one outside that
+--   range throws 'D1Exception' instead of silently rounding, and so does
+--   reading one, or a row id ('lastRowId') outside it.
+--
+-- * D1 binds every number as a REAL, 'D1Integer' included. Columns with
+--   INTEGER affinity convert a whole number back to an integer, but a TEXT
+--   column stores @5@ as @\"5.0\"@, and @? / 2@ is real division.
+--
+-- * JavaScript numbers do not distinguish integers from reals, so a REAL
+--   column holding @1.0@ comes back as @D1Integer 1@. A whole-number value of
+--   2^53 or more in any column, a REAL one included (say @1e20@), cannot be
+--   told apart from an out-of-range integer, so 'query' throws 'D1Exception'
+--   for it. Read such columns with @CAST(col AS TEXT)@.
+--
+-- * 'D1Real' NaN and ±Infinity are rejected with 'D1Exception': D1 would
+--   store them as NULL.
+--
+-- * Text may contain NUL and round-trips intact, but SQLite's @length()@
+--   stops counting at the first NUL.
 module Cloudflare.Workers.D1
   ( D1Database
   , d1
@@ -27,10 +43,11 @@ module Cloudflare.Workers.D1
   ) where
 
 import           Control.Exception               (Exception (..), throwIO, try)
-import           Control.Monad                   (forM, forM_, unless, when,
-                                                  (>=>))
+import           Control.Monad                   (forM, forM_, guard, unless,
+                                                  when, (>=>))
 import qualified Data.ByteString                 as B
 import           Data.Int                        (Int64)
+import           Data.Maybe                      (fromMaybe)
 import           Data.Text                       (Text)
 import qualified Data.Text                       as T
 
@@ -64,14 +81,17 @@ data D1Rows = D1Rows
   deriving (Eq, Show)
 
 data D1RunResult = D1RunResult
-  { changes   :: Int
+  { changes   :: Int64
   , lastRowId :: Int64
-    -- ^ SQLite's last_insert_rowid; 0 when nothing was inserted.
+    -- ^ The connection's @last_insert_rowid@ after the statement: the id of
+    -- the most recent successful INSERT, which an UPDATE or SELECT run after
+    -- it still reports; 0 if nothing has been inserted yet. Throws
+    -- 'D1Exception' if it is outside ±(2^53 − 1).
   }
   deriving (Eq, Show)
 
--- | An error reported by D1 (syntax, constraint, ...) or an integer outside
--- the exactly representable range.
+-- | An error reported by D1 (syntax, constraint, ...), an integer outside
+-- the exactly representable range, or a non-finite real.
 newtype D1Exception = D1Exception {d1Message :: Text}
   deriving (Show)
 
@@ -80,6 +100,10 @@ instance Exception D1Exception where
 
 -- | The D1 binding with this name. Throws 'EnvMissing' if absent and
 -- 'D1Exception' if the binding is something else.
+--
+-- The check is best effort: it looks for @prepare@ and @batch@ methods, which
+-- a service binding or Durable Object stub also appears to have, so such a
+-- binding passes here and fails on first use.
 d1 :: Env -> Text -> IO D1Database
 d1 env name =
   lookupBinding env name >>= \case
@@ -114,8 +138,10 @@ execute (D1Database db) (Statement q ps) = do
   runResult =<< d1Call (js_execute db (textToJS q) params)
 
 -- | Run statements as one atomic batch (@db.batch()@): if any fails, none
--- takes effect.
+-- takes effect. An empty list runs nothing (D1 itself rejects an empty
+-- batch).
 batch :: D1Database -> [Statement] -> IO [D1RunResult]
+batch _ [] = pure []
 batch (D1Database db) stmts = do
   arr <- js_newArray
   forM_ stmts $ \(Statement q ps) -> paramsToJS ps >>= js_pushPair arr (textToJS q)
@@ -123,10 +149,16 @@ batch (D1Database db) stmts = do
   n <- js_length results
   forM [0 .. n - 1] (js_index results >=> runResult)
 
+-- | @[changes, rowId, safe, rowIdText]@ from 'js_execute' and 'js_batch';
+-- @safe@ is false when the row id is outside ±(2^53 − 1).
 runResult :: JSVal -> IO D1RunResult
 runResult r = do
   c <- js_indexNumber r 0
   rowId <- js_indexNumber r 1
+  safe <- js_indexBool r 2
+  rowIdText <- js_indexString r 3
+  unless safe $
+    throwIO (D1Exception ("last_row_id " <> textFromJS rowIdText <> " is outside the exactly representable range (±(2^53 - 1))"))
   pure D1RunResult {changes = truncate c, lastRowId = truncate rowId}
 
 maxExact :: Int64
@@ -141,7 +173,10 @@ paramsToJS vs = do
       when (n > maxExact || n < negate maxExact) $
         throwIO (D1Exception ("integer " <> T.pack (show n) <> " is outside the range D1 represents exactly (±(2^53 - 1))"))
       js_pushNumber arr (fromIntegral n)
-    D1Real x -> js_pushNumber arr x
+    D1Real x -> do
+      when (isNaN x || isInfinite x) $
+        throwIO (D1Exception ("real " <> T.pack (show x) <> " is not finite; D1 would store it as NULL"))
+      js_pushNumber arr x
     D1Text t -> js_pushString arr (textToJS t)
     D1Blob b -> toJSBytes b >>= js_pushValue arr
   pure arr
@@ -167,7 +202,18 @@ d1Call :: IO JSVal -> IO JSVal
 d1Call act =
   try (awaitJS act) >>= \case
     Right v -> pure v
-    Left err -> throwIO (D1Exception (jsErrorMessage err))
+    Left err -> throwIO (D1Exception (dropRepeatedCause (jsErrorMessage err)))
+
+-- | D1 errors carry their message twice, as @D1_ERROR: X@ with cause @X@,
+-- which 'jsErrorMessage' renders as @D1_ERROR: X (cause: X)@. Keep one copy;
+-- leave any other cause in place.
+dropRepeatedCause :: Text -> Text
+dropRepeatedCause m = fromMaybe m $ do
+  inner <- T.stripSuffix ")" m
+  let (pre, cause) = T.breakOnEnd " (cause: " inner
+  base <- T.stripSuffix " (cause: " pre
+  guard (not (T.null cause) && cause `T.isSuffixOf` base)
+  pure base
 
 -- -- Imports. unsafe ones cannot throw; safe ones go through d1Call. --------
 
@@ -204,6 +250,9 @@ foreign import javascript unsafe "String($1[$2])"
 foreign import javascript unsafe "Number($1[$2])"
   js_indexNumber :: JSVal -> Int -> IO Double
 
+foreign import javascript unsafe "$1[$2] === true"
+  js_indexBool :: JSVal -> Int -> IO Bool
+
 foreign import javascript unsafe "$1[0]"
   js_cellTag :: JSVal -> IO Int
 
@@ -229,11 +278,17 @@ foreign import javascript safe
   js_query :: JSVal -> JSString -> JSVal -> IO JSVal
 
 foreign import javascript safe
-  "const r = await $1.prepare($2).bind(...$3).run(); \
-  \return [r.meta?.changes ?? 0, r.meta?.last_row_id ?? 0];"
+  "const runResult = (m) => { const id = m?.last_row_id ?? 0; \
+  \  const safe = typeof id === 'bigint' ? id >= -9007199254740991n && id <= 9007199254740991n : Number.isSafeInteger(id); \
+  \  return [Number(m?.changes ?? 0), Number(id), safe, String(id)]; }; \
+  \const r = await $1.prepare($2).bind(...$3).run(); \
+  \return runResult(r.meta);"
   js_execute :: JSVal -> JSString -> JSVal -> IO JSVal
 
 foreign import javascript safe
-  "const rs = await $1.batch($2.map(([q, ps]) => $1.prepare(q).bind(...ps))); \
-  \return rs.map((r) => [r.meta?.changes ?? 0, r.meta?.last_row_id ?? 0]);"
+  "const runResult = (m) => { const id = m?.last_row_id ?? 0; \
+  \  const safe = typeof id === 'bigint' ? id >= -9007199254740991n && id <= 9007199254740991n : Number.isSafeInteger(id); \
+  \  return [Number(m?.changes ?? 0), Number(id), safe, String(id)]; }; \
+  \const rs = await $1.batch($2.map(([q, ps]) => $1.prepare(q).bind(...ps))); \
+  \return rs.map((r) => runResult(r.meta));"
   js_batch :: JSVal -> JSVal -> IO JSVal
