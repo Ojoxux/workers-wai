@@ -17,6 +17,7 @@ haskell/cloudflare-workers     typed Workers bindings
   Cloudflare.Workers.Entry     runWorker :: (Env -> IO Handler) -> IO ()
   Cloudflare.Workers.Fetch     Request / Body / Response, fetch
   Cloudflare.Workers.Env       var, lookupVar
+  Cloudflare.Workers.D1        D1 database: query, execute, batch
   Cloudflare.Workers.Context   waitUntil
         |
         v
