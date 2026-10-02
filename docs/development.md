@@ -59,6 +59,10 @@ the upstream are stopped on exit, failure or Ctrl-C. `SHOW_WRANGLER_LOG=1`
 prints wrangler's log even when everything passes (it is always printed on
 failure).
 
+The first instance also has a local D1 database (binding `DB` in `test/wrangler.toml`)
+and runs 21 D1 checks against it (see [d1.md](d1.md)). D1 runs only under
+`wrangler dev`: Node has no D1, so these checks are not in `test/cases.mjs`.
+
 It also starts a second instance, `wrangler dev -c test/yesod-wrangler.toml`,
 and runs two session and CSRF checks against it. A third instance,
 `wrangler dev -c test/vendor-wrangler.toml` (`test-vendor`), runs 10 checks: the
