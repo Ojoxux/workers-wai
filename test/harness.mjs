@@ -5,6 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { makeWorker } from "../worker/src/runtime.mjs";
@@ -34,12 +35,19 @@ export function fakeCtx() {
 /**
  * A local HTTP server for outbound fetch tests.
  *   /echo        -> 200 JSON { method, xtest, body }, header x-upstream: yes
- *   /echo-all    -> 200 JSON { method, url, headers, body }
+ *   /echo-all    -> 200 JSON { method, url, headers, body } (any query string)
  *   /status/:n   -> status n, empty body
  *   /beacon      -> 204
  *   /hold        -> does not respond until the returned `release()` is called,
  *                   then 204. Lets a test observe a request as still pending.
  *   /cookies     -> 200 with two Set-Cookie headers, x=1 and y=2.
+ *   /redirect    -> 302 to /echo-all.
+ *   /gzip        -> 200 "hello gzip", gzip-compressed (Content-Encoding: gzip).
+ *   /sized       -> 200 "0123456789" with Content-Length: 10 (a HEAD gets the
+ *                   header but no body).
+ *   /broken-body -> 200 with Content-Length: 100, a few bytes, then the socket
+ *                   is destroyed (the body read fails after the headers).
+ *   /not-modified -> 304 with Content-Length: 5 and no body.
  * Every request is recorded in `hits`.
  */
 export function startUpstream() {
@@ -51,9 +59,34 @@ export function startUpstream() {
     const body = Buffer.concat(chunks).toString("utf8");
     hits.push({ method: req.method, url: req.url, body });
 
-    if (req.url === "/echo-all") {
+    if (req.url.split("?")[0] === "/echo-all") {
       res.writeHead(200, { "content-type": "application/json", "x-upstream": "yes" });
       res.end(JSON.stringify({ method: req.method, url: req.url, headers: req.headers, body }));
+      return;
+    }
+    if (req.url === "/redirect") {
+      res.writeHead(302, { location: "/echo-all" });
+      res.end();
+      return;
+    }
+    if (req.url === "/gzip") {
+      res.writeHead(200, { "content-type": "text/plain", "content-encoding": "gzip" });
+      res.end(gzipSync("hello gzip"));
+      return;
+    }
+    if (req.url === "/sized") {
+      res.writeHead(200, { "content-type": "text/plain", "content-length": "10" });
+      res.end("0123456789");
+      return;
+    }
+    if (req.url === "/broken-body") {
+      res.writeHead(200, { "content-type": "text/plain", "content-length": "100" });
+      res.write("abc", () => res.socket.destroy());
+      return;
+    }
+    if (req.url === "/not-modified") {
+      res.writeHead(304, { "content-length": "5" });
+      res.end();
       return;
     }
     if (req.url === "/echo") {

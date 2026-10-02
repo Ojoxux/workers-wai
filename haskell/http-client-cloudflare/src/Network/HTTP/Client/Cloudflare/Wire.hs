@@ -10,6 +10,7 @@ module Network.HTTP.Client.Cloudflare.Wire
   ( WireRequest (..)
   , parseRequest
   , renderResponse
+  , encodeTarget
   , maxHeaderBytes
   , maxBodyBytes
   ) where
@@ -19,7 +20,9 @@ import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Char8   as BC
 import qualified Data.ByteString.Lazy    as BL
 import qualified Data.CaseInsensitive    as CI
+import           Data.Bits               (shiftR, (.&.))
 import           Data.Char               (digitToInt, isHexDigit)
+import           Data.Word               (Word8)
 import           Network.HTTP.Types      (Header, HeaderName)
 
 data WireRequest = WireRequest
@@ -52,10 +55,24 @@ parseRequest raw = do
   (requestLine, headerLines) <- case splitLines headBlock of
     l : ls -> Right (l, ls)
     [] -> Left "empty request"
-  (m, target) <- case BC.split ' ' requestLine of
-    [m, t, v] | v `elem` ["HTTP/1.1", "HTTP/1.0"] -> Right (m, t)
-    _ -> Left ("malformed request line: " <> BC.unpack requestLine)
+  -- Method up to the first space, version after the last; everything in
+  -- between is the target, so a target containing spaces survives intact.
+  let (m, afterMethod) = BC.break (== ' ') requestLine
+      (beforeVersion, v) = BC.breakEnd (== ' ') afterMethod
+      target = B.drop 1 (B.dropEnd 1 beforeVersion)
+  if B.null m || B.null target || v `notElem` ["HTTP/1.1", "HTTP/1.0"]
+    then Left ("malformed request line: " <> BC.unpack requestLine)
+    else pure ()
+  if BC.head target /= '/'
+    then Left "request target is not origin-form; http-client-cloudflare does not support proxies"
+    else pure ()
   headers <- traverse parseHeader headerLines
+  -- The same test http-client applies: only this exact value makes it wait
+  -- for a 100 before sending the body. Any other value is not an error
+  -- (the header itself is never forwarded to fetch).
+  if lookup "expect" (lower headers) == Just "100-continue"
+    then Left "Expect: 100-continue is not supported (fetch sends the whole request at once)"
+    else pure ()
   body <- case lookup "transfer-encoding" (lower headers) of
     Just te | "chunked" `B.isInfixOf` te -> dechunk afterHead
     _ -> case lookup "content-length" (lower headers) of
@@ -113,18 +130,44 @@ dechunk = go mempty 0
           if B.take 2 afterChunk /= "\r\n" then Left "chunk not followed by CRLF" else pure ()
           go (acc <> BB.byteString chunk) (total + size) (B.drop 2 afterChunk)
 
--- | HTTP/1.1 response bytes for http-client: the body is complete, so the
--- length is exact; framing headers from the original response are replaced
--- and the connection is closed after this response.
-renderResponse :: Int -> B.ByteString -> [Header] -> B.ByteString -> B.ByteString
-renderResponse status reason headers body =
+-- | A request target as URL text for fetch: bytes that cannot appear
+-- literally in a URL (controls, space, and anything >= 0x80) are
+-- percent-encoded byte by byte, as are @#@ and @\\@, which the URL parser
+-- would otherwise take as the start of a fragment and as a path separator.
+-- Existing escapes are left alone.
+--
+-- The result is still parsed as a URL, so @.@ and @..@ path segments are
+-- normalised away before the request is sent (@/a/../b@ arrives as @/b@).
+encodeTarget :: B.ByteString -> B.ByteString
+encodeTarget = BL.toStrict . BB.toLazyByteString . B.foldr (\w acc -> enc w <> acc) mempty
+  where
+    enc :: Word8 -> BB.Builder
+    enc w
+      | w >= 0x80 || w < 0x21 || w == 0x23 || w == 0x5c =
+          BB.char7 '%' <> hex (w `shiftR` 4) <> hex (w .&. 0x0f)
+      | otherwise = BB.word8 w
+    hex n = BB.word8 (B.index "0123456789ABCDEF" (fromIntegral n))
+
+-- | HTTP/1.1 response bytes for http-client, given the request method. The
+-- body is complete, so its length is exact and replaces any upstream
+-- framing. A response that carries no body (to @HEAD@, or a 1xx, 204 or 304)
+-- keeps the upstream Content-Length, which describes the representation
+-- rather than this empty body, and gets none if upstream sent none.
+-- Content-Encoding is dropped: fetch has already decoded the body, and
+-- http-client would decode it again. The connection is closed after this
+-- response.
+renderResponse :: B.ByteString -> Int -> B.ByteString -> [Header] -> B.ByteString -> B.ByteString
+renderResponse method status reason headers body =
   BL.toStrict . BB.toLazyByteString $
     "HTTP/1.1 " <> BB.intDec status <> " " <> BB.byteString reason <> "\r\n"
       <> foldMap header (filter (not . dropped . fst) headers)
-      <> "Content-Length: " <> BB.intDec (B.length body) <> "\r\n"
+      <> (if bodiless then mempty else "Content-Length: " <> BB.intDec (B.length body) <> "\r\n")
       <> "Connection: close\r\n\r\n"
       <> BB.byteString body
   where
+    bodiless = method == "HEAD" || (status >= 100 && status < 200) || status `elem` [204, 304]
     header (k, v) = BB.byteString (CI.original k) <> ": " <> BB.byteString v <> "\r\n"
     dropped :: HeaderName -> Bool
-    dropped k = CI.foldedCase k `elem` ["content-length", "transfer-encoding", "connection"]
+    dropped k =
+      CI.foldedCase k `elem` ["transfer-encoding", "connection", "content-encoding"]
+        || (CI.foldedCase k == "content-length" && not bodiless)

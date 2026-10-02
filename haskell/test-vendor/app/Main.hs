@@ -37,13 +37,16 @@ import           Data.Text                      (Text)
 import qualified Data.Text                      as T
 import qualified Data.Text.Encoding             as TE
 import           Data.Word                      (Word64)
-import           Network.HTTP.Client            (HttpException (..), Manager, RequestBody (..),
-                                                 applyBasicAuth, httpLbs, method, parseRequest,
-                                                 redirectCount, requestBody, requestHeaders,
-                                                 responseBody, responseHeaders, responseStatus)
-import           Network.HTTP.Client.Cloudflare (newFetchManager)
+import           Network.HTTP.Client            (HttpException (..), Manager, Proxy (..),
+                                                 RequestBody (..), applyBasicAuth, httpLbs,
+                                                 managerSetProxy, method, newManager,
+                                                 parseRequest, path, redirectCount, requestBody,
+                                                 requestHeaders, responseBody, responseHeaders,
+                                                 responseStatus, useProxy)
+import           Network.HTTP.Client.Cloudflare (fetchManagerSettings, newFetchManager)
 import           Network.HTTP.Types             (statusCode)
 import           Network.Wai.Handler.Cloudflare (runCloudflare)
+import           Text.Read                      (readMaybe)
 import qualified Web.ClientSession              as CS
 import           Yesod.Auth
 import           Yesod.Auth.OAuth2.GitHub       (oauth2GitHub)
@@ -266,13 +269,19 @@ getClientSessionR = liftIO $ do
 -- http-client exception becomes "exception <constructor> <details>".
 --
 -- Query: url (required), method, body, mode=chunked, contentType, accept,
--- basic=user:pass, redirects (redirect count), expect=1.
+-- basic=user:pass, redirects (redirect count), expect (Expect header value), rawPath,
+-- proxy=1.
 getHttpR :: Handler Text
 getHttpR = do
-  App manager <- getYesod
+  App defaultManager <- getYesod
   params <- reqGetParams <$> getRequest
   let param k = lookup k params
-      bodyBytes = TE.encodeUtf8 (fromMaybe "" (param "body"))
+  -- proxy: an http-client proxy in front of the fetch Manager, which the
+  -- bridge must refuse for http and https URLs alike.
+  manager <- case param "proxy" of
+    Just _ -> liftIO (newManager (managerSetProxy (useProxy (Proxy "127.0.0.1" 9)) fetchManagerSettings))
+    Nothing -> pure defaultManager
+  let bodyBytes = TE.encodeUtf8 (fromMaybe "" (param "body"))
       chunks = BC.split ',' bodyBytes
   initial <- liftIO (parseRequest (T.unpack (fromMaybe "" (param "url"))))
   streamBody <- liftIO $ do
@@ -291,10 +300,12 @@ getHttpR = do
             , requestHeaders =
                 headerFor "Content-Type" "contentType"
                   <> headerFor "Accept" "accept"
-                  <> maybe [] (const [("Expect", "100-continue")]) (param "expect")
-            , redirectCount = maybe 10 (read . T.unpack) (param "redirects")
+                  <> headerFor "Expect" "expect"
+            , redirectCount = fromMaybe 10 (readMaybe . T.unpack =<< param "redirects")
             }
-  result <- liftIO (try (httpLbs req manager))
+      -- rawPath: set the path verbatim, bypassing parseRequest's escaping.
+      req' = maybe req (\p -> req {path = TE.encodeUtf8 p}) (param "rawPath")
+  result <- liftIO (try (httpLbs req' manager))
   pure $ case result of
     Left (HttpExceptionRequest _ content) -> "exception " <> T.pack (show content)
     Left other -> "exception " <> T.pack (show other)
@@ -303,7 +314,7 @@ getHttpR = do
         T.pack (show (statusCode (responseStatus res)))
           : [ TE.decodeLatin1 (CI.foldedCase k) <> ": " <> TE.decodeLatin1 v
             | (k, v) <- responseHeaders res
-            , CI.foldedCase k `elem` ["content-type", "content-encoding", "set-cookie", "location", "x-upstream"]
+            , CI.foldedCase k `elem` ["content-type", "content-length", "content-encoding", "set-cookie", "location", "x-upstream"]
             ]
           <> ["", TE.decodeUtf8 (BL.toStrict (responseBody res))]
 
