@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | A Worker that exercises cloudflare-workers, one route per behaviour.
@@ -6,16 +7,19 @@ module Main (main) where
 
 import           Cloudflare.Workers.Context (Context, waitUntil)
 import qualified Cloudflare.Workers.Crypto  as Crypto
+import qualified Cloudflare.Workers.D1      as D1
 import           Cloudflare.Workers.Entry   (runWorker)
 import           Cloudflare.Workers.Env     (Env)
 import qualified Cloudflare.Workers.Env     as Env
 import qualified Cloudflare.Workers.Fetch   as F
+import           Control.Exception          (try)
 import           Control.Monad              (join, void)
 import           Data.Bits                  (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
 import           Data.CaseInsensitive       (original)
 import           Data.Char                  (ord)
+import           Data.Int                   (Int64)
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
 import           Network.HTTP.Types         (parseQuery)
@@ -120,6 +124,118 @@ route env req ctx =
         if back == Just "payload" && wrongKey == Nothing && wrongAad == Nothing && tampered == Nothing
           then "ok"
           else T.pack (show (back, wrongKey, wrongAad, tampered))
+    ["d1", "roundtrip"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS vals (i INTEGER, j INTEGER, r REAL, s TEXT, b BLOB, n INTEGER)" []
+      exec db "DELETE FROM vals" []
+      exec db "INSERT INTO vals VALUES (?, ?, ?, ?, ?, ?)"
+        [ D1.D1Integer 9007199254740991
+        , D1.D1Integer (-9007199254740991)
+        , D1.D1Real 1.5
+        , D1.D1Text "héllo"
+        , D1.D1Blob (B.pack [0, 255, 16])
+        , D1.D1Null
+        ]
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT i, j, r, s, b, n FROM vals" [])
+    ["d1", "empty"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS vals (i INTEGER, j INTEGER, r REAL, s TEXT, b BLOB, n INTEGER)" []
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT i FROM vals WHERE 0" [])
+    ["d1", "real-one"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS reals (r REAL)" []
+      exec db "DELETE FROM reals" []
+      exec db "INSERT INTO reals VALUES (?)" [D1.D1Real 1.0]
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT r FROM reals" [])
+    ["d1", "read-overflow"] -> do
+      db <- D1.d1 env "DB"
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT 9007199254740993" [])
+    ["d1", "empty-batch"] -> do
+      db <- D1.d1 env "DB"
+      rs <- D1.batch db []
+      pure (ok (T.intercalate "," (map (T.pack . show . D1.changes) rs)))
+    ["d1", "not-d1"] -> do
+      _ <- D1.d1 env "GREETING"
+      pure (ok "unreachable")
+    ["d1", "text"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS texts (k INTEGER, s TEXT)" []
+      exec db "DELETE FROM texts" []
+      exec db "INSERT INTO texts VALUES (1, ?), (2, ?)" [D1.D1Text "😀 héllo", D1.D1Text "a\0b"]
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT s FROM texts ORDER BY k" [])
+    ["d1", "blobs"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS blobs (k INTEGER, b BLOB)" []
+      exec db "DELETE FROM blobs" []
+      let big = B.pack (map fromIntegral [0 .. 65535 :: Int])
+      exec db "INSERT INTO blobs VALUES (1, ?), (2, ?)" [D1.D1Blob B.empty, D1.D1Blob big]
+      res <- D1.query db (D1.Statement "SELECT b FROM blobs ORDER BY k" [])
+      let describe = \case
+            [D1.D1Blob b] -> "blob " <> T.pack (show (B.length b)) <> " " <> T.pack (show (b == B.take (B.length b) big))
+            other -> T.pack (show (map (T.take 40 . renderD1) other))
+      pure (ok (T.intercalate "\n" (map describe (D1.rows res))))
+    ["d1", "rows"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS multi (k INTEGER, v TEXT)" []
+      exec db "DELETE FROM multi" []
+      exec db "INSERT INTO multi VALUES (2, 'b'), (3, 'c'), (1, 'a')" []
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT k, v FROM multi ORDER BY k" [])
+    ["d1", "bind-count"] -> do
+      db <- D1.d1 env "DB"
+      _ <- D1.query db (D1.Statement "SELECT ?, ?" [D1.D1Integer 1])
+      pure (ok "unreachable")
+    ["d1", "rowid-range", how] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS bigids (id INTEGER PRIMARY KEY, v TEXT)" []
+      exec db "DELETE FROM bigids" []
+      rs <- if how == "batch" then D1.batch db [insertBigId] else pure <$> D1.execute db insertBigId
+      pure (ok (T.intercalate "," (map (\r -> "lastRowId=" <> T.pack (show (D1.lastRowId r))) rs)))
+    ["d1", "rowid-sticky"] -> do
+      -- last_insert_rowid outlives the INSERT: a later DELETE reports it too,
+      -- and must still succeed.
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS bigids (id INTEGER PRIMARY KEY, v TEXT)" []
+      exec db "DELETE FROM bigids" []
+      exec db (D1.statementSql insertBigId) []
+      r <- D1.execute db (D1.Statement "DELETE FROM bigids" [])
+      pure (ok ("changes=" <> T.pack (show (D1.changes r)) <> " lastRowId=" <> T.pack (show (D1.lastRowId r))))
+    ["d1", "nonfinite", which] -> do
+      db <- D1.d1 env "DB"
+      let x = if which == "nan" then 0 / 0 else 1 / 0 :: Double
+      ok . renderRows <$> D1.query db (D1.Statement "SELECT ?" [D1.D1Real x])
+    ["d1", "too-big"] -> do
+      db <- D1.d1 env "DB"
+      _ <- D1.query db (D1.Statement "SELECT ?" [D1.D1Integer 9007199254740992])
+      pure (ok "unreachable")
+    ["d1", "run"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY, v TEXT)" []
+      exec db "DELETE FROM runs" []
+      r <- D1.execute db (D1.Statement "INSERT INTO runs (v) VALUES (?)" [D1.D1Text "x"])
+      pure (ok ("changes=" <> T.pack (show (D1.changes r)) <> " lastRowId=" <> T.pack (show (D1.lastRowId r))))
+    ["d1", "batch"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS uniq (x INTEGER UNIQUE)" []
+      exec db "DELETE FROM uniq" []
+      rs <- D1.batch db [insertUniq 1, insertUniq 2]
+      pure (ok (T.intercalate "," (map (T.pack . show . D1.changes) rs)))
+    ["d1", "batch-atomic"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS uniq (x INTEGER UNIQUE)" []
+      exec db "DELETE FROM uniq" []
+      outcome <- try (D1.batch db [insertUniq 1, insertUniq 1]) :: IO (Either D1.D1Exception [D1.D1RunResult])
+      count <- D1.query db (D1.Statement "SELECT COUNT(*) FROM uniq" [])
+      let n = case D1.rows count of
+            [[v]] -> renderD1 v
+            other -> T.pack (show other)
+      pure (ok ("batch=" <> either (const "failed") (const "succeeded") outcome <> " count=" <> n))
+    ["d1", "syntax"] -> do
+      db <- D1.d1 env "DB"
+      _ <- D1.query db (D1.Statement "SELEC 1" [])
+      pure (ok "unreachable")
+    ["d1", "missing"] -> do
+      _ <- D1.d1 env "NOPE"
+      pure (ok "unreachable")
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 
 ok :: Text -> F.Response
@@ -158,3 +274,27 @@ fromHex s
       | c >= '0' && c <= '9' = Just (ord c - ord '0')
       | c >= 'a' && c <= 'f' = Just (ord c - ord 'a' + 10)
       | otherwise = Nothing
+
+exec :: D1.D1Database -> Text -> [D1.D1Value] -> IO ()
+exec db q ps = void (D1.execute db (D1.Statement q ps))
+
+-- | An id beyond 2^53, as a SQL literal since it cannot be bound.
+insertBigId :: D1.Statement
+insertBigId = D1.Statement "INSERT INTO bigids (id, v) VALUES (9007199254740993, 'x')" []
+
+insertUniq :: Int64 -> D1.Statement
+insertUniq x = D1.Statement "INSERT INTO uniq (x) VALUES (?)" [D1.D1Integer x]
+
+renderD1 :: D1.D1Value -> Text
+renderD1 = \case
+  D1.D1Null -> "null"
+  D1.D1Integer n -> "int:" <> T.pack (show n)
+  D1.D1Real x -> "real:" <> T.pack (show x)
+  D1.D1Text t -> "text:" <> t
+  D1.D1Blob b -> "blob:" <> toHex b
+
+renderRows :: D1.D1Rows -> Text
+renderRows res =
+  T.intercalate "," (D1.columnNames res)
+    <> "\n"
+    <> T.intercalate "\n" (map (T.unwords . map renderD1) (D1.rows res))

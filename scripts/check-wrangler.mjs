@@ -4,6 +4,8 @@
 // starts test/yesod-wrangler.toml (test-yesod) and checks sessions and CSRF, and
 // test/vendor-wrangler.toml (test-vendor) and checks the vendored crypto stack and
 // http-client's Manager over fetch (GET, form POST, redirects, gzip, failures).
+// test-worker also gets the local D1 of test/wrangler.toml (binding DB), against
+// which the D1 checks run: Node has no D1, so they exist only here.
 //
 //   node scripts/check-wrangler.mjs
 //   SHOW_WRANGLER_LOG=1 node scripts/check-wrangler.mjs   # print the log even on success
@@ -283,6 +285,121 @@ const managerChecks = [
   }],
 ];
 
+// --- D1 against the local database of test/wrangler.toml (workerd only:
+// Node has no D1) ----------------------------------------------------------
+
+async function viaD1(path) {
+  const res = await send(path);
+  return { status: res.status, text: await res.text() };
+}
+
+const d1Checks = [
+  ["d1 values round-trip", async (p) => {
+    const r = await viaD1("/d1/roundtrip");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text,
+      "i,j,r,s,b,n\nint:9007199254740991 int:-9007199254740991 real:1.5 text:héllo blob:00ff10 null");
+  }],
+  ["d1 rejects integers beyond 2^53", async (p) => {
+    const r = await viaD1("/d1/too-big");
+    expectEqual(p, "status", r.status, 500);
+    if (!r.text.includes("outside the range")) p.push(r.text);
+  }],
+  ["d1 execute reports changes and the row id", async (p) => {
+    expectEqual(p, "body", (await viaD1("/d1/run")).text, "changes=1 lastRowId=Just 1");
+  }],
+  ["d1 batch runs every statement", async (p) => {
+    expectEqual(p, "body", (await viaD1("/d1/batch")).text, "1,1");
+  }],
+  ["d1 batch is atomic", async (p) => {
+    expectEqual(p, "body", (await viaD1("/d1/batch-atomic")).text, "batch=failed count=int:0");
+  }],
+  ["d1 errors are D1Exception", async (p) => {
+    const r = await viaD1("/d1/syntax");
+    expectEqual(p, "status", r.status, 500);
+    if (!/d1: .*syntax error/s.test(r.text)) p.push(r.text);
+  }],
+  ["d1 on a missing binding", async (p) => {
+    const r = await viaD1("/d1/missing");
+    expectEqual(p, "status", r.status, 500);
+    if (!r.text.includes("env: NOPE is not set")) p.push(r.text);
+  }],
+  ["d1 error text appears once", async (p) => {
+    const r = await viaD1("/d1/syntax");
+    expectEqual(p, "status", r.status, 500);
+    expectEqual(p, "message line", r.text.split("\n")[1],
+      'd1: D1_ERROR: near "SELEC": syntax error at offset 0: SQLITE_ERROR');
+  }],
+  ["d1 on a binding that is not D1", async (p) => {
+    const r = await viaD1("/d1/not-d1");
+    expectEqual(p, "status", r.status, 500);
+    if (!r.text.includes("d1: binding GREETING is not a D1 database")) p.push(r.text);
+  }],
+  ["d1 empty result keeps the column names", async (p) => {
+    const r = await viaD1("/d1/empty");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "i\n");
+  }],
+  ["d1 REAL 1.0 reads back as an integer", async (p) => {
+    expectEqual(p, "body", (await viaD1("/d1/real-one")).text, "r\nint:1");
+  }],
+  ["d1 rejects reading integers beyond 2^53", async (p) => {
+    const r = await viaD1("/d1/read-overflow");
+    expectEqual(p, "status", r.status, 500);
+    if (!/d1: .*outside the exactly representable range/s.test(r.text)) p.push(r.text);
+  }],
+  ["d1 empty batch", async (p) => {
+    const r = await viaD1("/d1/empty-batch");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "");
+  }],
+  ["d1 text round-trip (emoji, NUL)", async (p) => {
+    const r = await viaD1("/d1/text");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "s\ntext:😀 héllo\ntext:a\u0000b");
+  }],
+  ["d1 empty and 64 KiB BLOBs round-trip", async (p) => {
+    const r = await viaD1("/d1/blobs");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "blob 0 True\nblob 65536 True");
+  }],
+  ["d1 several rows in order", async (p) => {
+    expectEqual(p, "body", (await viaD1("/d1/rows")).text, "k,v\nint:1 text:a\nint:2 text:b\nint:3 text:c");
+  }],
+  ["d1 wrong number of bindings is D1Exception", async (p) => {
+    const r = await viaD1("/d1/bind-count");
+    expectEqual(p, "status", r.status, 500);
+    if (!/d1: .*Wrong number of parameter bindings/s.test(r.text)) p.push(r.text);
+  }],
+  // Each route below inserts its own id beyond 2^53 first, so none relies on
+  // the connection state an earlier check left behind.
+  ["d1 execute reports a row id beyond 2^53 as Nothing", async (p) => {
+    const r = await viaD1("/d1/rowid-range/execute");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "lastRowId=Nothing");
+  }],
+  ["d1 batch reports a row id beyond 2^53 as Nothing", async (p) => {
+    const r = await viaD1("/d1/rowid-range/batch");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "lastRowId=Nothing");
+  }],
+  ["d1 statements after a row id beyond 2^53 still run", async (p) => {
+    const r = await viaD1("/d1/rowid-sticky");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "changes=1 lastRowId=Nothing");
+    const run = await viaD1("/d1/run");
+    expectEqual(p, "run status", run.status, 200);
+    expectEqual(p, "run body", run.text, "changes=1 lastRowId=Just 1");
+  }],
+  ["d1 rejects non-finite reals", async (p) => {
+    for (const [which, name] of [["nan", "NaN"], ["inf", "Infinity"]]) {
+      const r = await viaD1(`/d1/nonfinite/${which}`);
+      expectEqual(p, `${which} status`, r.status, 500);
+      if (!r.text.includes(`d1: real ${name} is not finite`)) p.push(`${which}: ${r.text}`);
+    }
+  }],
+];
+
 // --- run --------------------------------------------------------------------
 
 let failures = 0;
@@ -327,6 +444,15 @@ try {
     report(name, problems);
   }
   for (const [name, run] of managerChecks) {
+    const problems = [];
+    try {
+      await run(problems);
+    } catch (e) {
+      problems.push(`threw ${e?.stack ?? e}`);
+    }
+    report(name, problems);
+  }
+  for (const [name, run] of d1Checks) {
     const problems = [];
     try {
       await run(problems);

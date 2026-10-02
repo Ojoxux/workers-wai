@@ -15,6 +15,7 @@ library
   exposed-modules:
     Cloudflare.Workers.Context
     Cloudflare.Workers.Crypto
+    Cloudflare.Workers.D1
     Cloudflare.Workers.Entry
     Cloudflare.Workers.Env
     Cloudflare.Workers.Fetch
