@@ -306,7 +306,7 @@ const d1Checks = [
     if (!r.text.includes("outside the range")) p.push(r.text);
   }],
   ["d1 execute reports changes and the row id", async (p) => {
-    expectEqual(p, "body", (await viaD1("/d1/run")).text, "changes=1 lastRowId>0=True");
+    expectEqual(p, "body", (await viaD1("/d1/run")).text, "changes=1 lastRowId=Just 1");
   }],
   ["d1 batch runs every statement", async (p) => {
     expectEqual(p, "body", (await viaD1("/d1/batch")).text, "1,1");
@@ -371,14 +371,25 @@ const d1Checks = [
     expectEqual(p, "status", r.status, 500);
     if (!/d1: .*Wrong number of parameter bindings/s.test(r.text)) p.push(r.text);
   }],
-  ["d1 rejects row ids beyond 2^53", async (p) => {
-    for (const how of ["execute", "batch"]) {
-      const r = await viaD1(`/d1/rowid-range/${how}`);
-      expectEqual(p, `${how} status`, r.status, 500);
-      if (!/d1: last_row_id \d+ is outside the exactly representable range/.test(r.text)) {
-        p.push(`${how}: ${r.text}`);
-      }
-    }
+  // Each route below inserts its own id beyond 2^53 first, so none relies on
+  // the connection state an earlier check left behind.
+  ["d1 execute reports a row id beyond 2^53 as Nothing", async (p) => {
+    const r = await viaD1("/d1/rowid-range/execute");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "lastRowId=Nothing");
+  }],
+  ["d1 batch reports a row id beyond 2^53 as Nothing", async (p) => {
+    const r = await viaD1("/d1/rowid-range/batch");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "lastRowId=Nothing");
+  }],
+  ["d1 statements after a row id beyond 2^53 still run", async (p) => {
+    const r = await viaD1("/d1/rowid-sticky");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text, "changes=1 lastRowId=Nothing");
+    const run = await viaD1("/d1/run");
+    expectEqual(p, "run status", run.status, 200);
+    expectEqual(p, "run body", run.text, "changes=1 lastRowId=Just 1");
   }],
   ["d1 rejects non-finite reals", async (p) => {
     for (const [which, name] of [["nan", "NaN"], ["inf", "Infinity"]]) {

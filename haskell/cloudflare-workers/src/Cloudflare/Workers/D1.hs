@@ -12,7 +12,8 @@
 --
 -- * Integers are exact only within ±(2^53 − 1). Binding one outside that
 --   range throws 'D1Exception' instead of silently rounding, and so does
---   reading one, or a row id ('lastRowId') outside it.
+--   reading one. A row id outside it is reported as @'lastRowId' = Nothing@
+--   rather than thrown, since the statement has already run by then.
 --
 -- * D1 binds every number as a REAL, 'D1Integer' included. Columns with
 --   INTEGER affinity convert a whole number back to an integer, but a TEXT
@@ -82,11 +83,12 @@ data D1Rows = D1Rows
 
 data D1RunResult = D1RunResult
   { changes   :: Int64
-  , lastRowId :: Int64
+  , lastRowId :: Maybe Int64
     -- ^ The connection's @last_insert_rowid@ after the statement: the id of
-    -- the most recent successful INSERT, which an UPDATE or SELECT run after
-    -- it still reports; 0 if nothing has been inserted yet. Throws
-    -- 'D1Exception' if it is outside ±(2^53 − 1).
+    -- the most recent successful INSERT, which an UPDATE, DELETE or SELECT
+    -- run after it still reports; @Just 0@ if nothing has been inserted yet.
+    -- 'Nothing' when the id is outside ±(2^53 − 1) and so cannot be
+    -- represented exactly; it is never silently rounded.
   }
   deriving (Eq, Show)
 
@@ -149,17 +151,18 @@ batch (D1Database db) stmts = do
   n <- js_length results
   forM [0 .. n - 1] (js_index results >=> runResult)
 
--- | @[changes, rowId, safe, rowIdText]@ from 'js_execute' and 'js_batch';
--- @safe@ is false when the row id is outside ±(2^53 − 1).
+-- | @[changes, rowId, safe]@ from 'js_execute' and 'js_batch'; @safe@ is
+-- false when the row id is outside ±(2^53 − 1). Never throws: the statement
+-- has already run.
 runResult :: JSVal -> IO D1RunResult
 runResult r = do
   c <- js_indexNumber r 0
   rowId <- js_indexNumber r 1
   safe <- js_indexBool r 2
-  rowIdText <- js_indexString r 3
-  unless safe $
-    throwIO (D1Exception ("last_row_id " <> textFromJS rowIdText <> " is outside the exactly representable range (±(2^53 - 1))"))
-  pure D1RunResult {changes = truncate c, lastRowId = truncate rowId}
+  pure D1RunResult
+    { changes = truncate c
+    , lastRowId = if safe then Just (truncate rowId) else Nothing
+    }
 
 maxExact :: Int64
 maxExact = 9007199254740991
@@ -212,7 +215,7 @@ dropRepeatedCause m = fromMaybe m $ do
   inner <- T.stripSuffix ")" m
   let (pre, cause) = T.breakOnEnd " (cause: " inner
   base <- T.stripSuffix " (cause: " pre
-  guard (not (T.null cause) && cause `T.isSuffixOf` base)
+  guard (not (T.null cause) && (base == cause || (": " <> cause) `T.isSuffixOf` base))
   pure base
 
 -- -- Imports. unsafe ones cannot throw; safe ones go through d1Call. --------
@@ -280,7 +283,7 @@ foreign import javascript safe
 foreign import javascript safe
   "const runResult = (m) => { const id = m?.last_row_id ?? 0; \
   \  const safe = typeof id === 'bigint' ? id >= -9007199254740991n && id <= 9007199254740991n : Number.isSafeInteger(id); \
-  \  return [Number(m?.changes ?? 0), Number(id), safe, String(id)]; }; \
+  \  return [Number(m?.changes ?? 0), Number(id), safe]; }; \
   \const r = await $1.prepare($2).bind(...$3).run(); \
   \return runResult(r.meta);"
   js_execute :: JSVal -> JSString -> JSVal -> IO JSVal
@@ -288,7 +291,7 @@ foreign import javascript safe
 foreign import javascript safe
   "const runResult = (m) => { const id = m?.last_row_id ?? 0; \
   \  const safe = typeof id === 'bigint' ? id >= -9007199254740991n && id <= 9007199254740991n : Number.isSafeInteger(id); \
-  \  return [Number(m?.changes ?? 0), Number(id), safe, String(id)]; }; \
+  \  return [Number(m?.changes ?? 0), Number(id), safe]; }; \
   \const rs = await $1.batch($2.map(([q, ps]) => $1.prepare(q).bind(...ps))); \
   \return rs.map((r) => runResult(r.meta));"
   js_batch :: JSVal -> JSVal -> IO JSVal

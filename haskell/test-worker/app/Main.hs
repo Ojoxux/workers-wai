@@ -188,9 +188,17 @@ route env req ctx =
       db <- D1.d1 env "DB"
       exec db "CREATE TABLE IF NOT EXISTS bigids (id INTEGER PRIMARY KEY, v TEXT)" []
       exec db "DELETE FROM bigids" []
-      let ins = D1.Statement "INSERT INTO bigids (id, v) VALUES (9007199254740993, 'x')" []
-      rs <- if how == "batch" then D1.batch db [ins] else pure <$> D1.execute db ins
-      pure (ok (T.intercalate "," (map (T.pack . show . D1.lastRowId) rs)))
+      rs <- if how == "batch" then D1.batch db [insertBigId] else pure <$> D1.execute db insertBigId
+      pure (ok (T.intercalate "," (map (\r -> "lastRowId=" <> T.pack (show (D1.lastRowId r))) rs)))
+    ["d1", "rowid-sticky"] -> do
+      -- last_insert_rowid outlives the INSERT: a later DELETE reports it too,
+      -- and must still succeed.
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS bigids (id INTEGER PRIMARY KEY, v TEXT)" []
+      exec db "DELETE FROM bigids" []
+      exec db (D1.statementSql insertBigId) []
+      r <- D1.execute db (D1.Statement "DELETE FROM bigids" [])
+      pure (ok ("changes=" <> T.pack (show (D1.changes r)) <> " lastRowId=" <> T.pack (show (D1.lastRowId r))))
     ["d1", "nonfinite", which] -> do
       db <- D1.d1 env "DB"
       let x = if which == "nan" then 0 / 0 else 1 / 0 :: Double
@@ -204,7 +212,7 @@ route env req ctx =
       exec db "CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY, v TEXT)" []
       exec db "DELETE FROM runs" []
       r <- D1.execute db (D1.Statement "INSERT INTO runs (v) VALUES (?)" [D1.D1Text "x"])
-      pure (ok ("changes=" <> T.pack (show (D1.changes r)) <> " lastRowId>0=" <> T.pack (show (D1.lastRowId r > 0))))
+      pure (ok ("changes=" <> T.pack (show (D1.changes r)) <> " lastRowId=" <> T.pack (show (D1.lastRowId r))))
     ["d1", "batch"] -> do
       db <- D1.d1 env "DB"
       exec db "CREATE TABLE IF NOT EXISTS uniq (x INTEGER UNIQUE)" []
@@ -269,6 +277,10 @@ fromHex s
 
 exec :: D1.D1Database -> Text -> [D1.D1Value] -> IO ()
 exec db q ps = void (D1.execute db (D1.Statement q ps))
+
+-- | An id beyond 2^53, as a SQL literal since it cannot be bound.
+insertBigId :: D1.Statement
+insertBigId = D1.Statement "INSERT INTO bigids (id, v) VALUES (9007199254740993, 'x')" []
 
 insertUniq :: Int64 -> D1.Statement
 insertUniq x = D1.Statement "INSERT INTO uniq (x) VALUES (?)" [D1.D1Integer x]
