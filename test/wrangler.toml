@@ -5,3 +5,10 @@ compatibility_date = "2026-09-01"
 # Must match `env` in test/cases.mjs.
 [vars]
 GREETING = "hello from vars"
+
+# Local D1 for scripts/check-wrangler.mjs; the id is a placeholder, which
+# wrangler dev accepts for a local database.
+[[d1_databases]]
+binding = "DB"
+database_name = "cloudflare-workers-test"
+database_id = "00000000-0000-0000-0000-000000000000"

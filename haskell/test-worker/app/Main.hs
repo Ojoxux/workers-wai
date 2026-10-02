@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | A Worker that exercises cloudflare-workers, one route per behaviour.
@@ -6,16 +7,19 @@ module Main (main) where
 
 import           Cloudflare.Workers.Context (Context, waitUntil)
 import qualified Cloudflare.Workers.Crypto  as Crypto
+import qualified Cloudflare.Workers.D1      as D1
 import           Cloudflare.Workers.Entry   (runWorker)
 import           Cloudflare.Workers.Env     (Env)
 import qualified Cloudflare.Workers.Env     as Env
 import qualified Cloudflare.Workers.Fetch   as F
+import           Control.Exception          (try)
 import           Control.Monad              (join, void)
 import           Data.Bits                  (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
 import           Data.CaseInsensitive       (original)
 import           Data.Char                  (ord)
+import           Data.Int                   (Int64)
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
 import           Network.HTTP.Types         (parseQuery)
@@ -120,6 +124,56 @@ route env req ctx =
         if back == Just "payload" && wrongKey == Nothing && wrongAad == Nothing && tampered == Nothing
           then "ok"
           else T.pack (show (back, wrongKey, wrongAad, tampered))
+    ["d1", "roundtrip"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS vals (i INTEGER, j INTEGER, r REAL, s TEXT, b BLOB, n INTEGER)" []
+      exec db "DELETE FROM vals" []
+      exec db "INSERT INTO vals VALUES (?, ?, ?, ?, ?, ?)"
+        [ D1.D1Integer 9007199254740991
+        , D1.D1Integer (-9007199254740991)
+        , D1.D1Real 1.5
+        , D1.D1Text "héllo"
+        , D1.D1Blob (B.pack [0, 255, 16])
+        , D1.D1Null
+        ]
+      res <- D1.query db (D1.Statement "SELECT i, j, r, s, b, n FROM vals" [])
+      pure . ok $
+        T.intercalate "," (D1.columnNames res)
+          <> "\n"
+          <> T.intercalate "\n" (map (T.unwords . map renderD1) (D1.rows res))
+    ["d1", "too-big"] -> do
+      db <- D1.d1 env "DB"
+      _ <- D1.query db (D1.Statement "SELECT ?" [D1.D1Integer 9007199254740992])
+      pure (ok "unreachable")
+    ["d1", "run"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY, v TEXT)" []
+      exec db "DELETE FROM runs" []
+      r <- D1.execute db (D1.Statement "INSERT INTO runs (v) VALUES (?)" [D1.D1Text "x"])
+      pure (ok ("changes=" <> T.pack (show (D1.changes r)) <> " lastRowId>0=" <> T.pack (show (D1.lastRowId r > 0))))
+    ["d1", "batch"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS uniq (x INTEGER UNIQUE)" []
+      exec db "DELETE FROM uniq" []
+      rs <- D1.batch db [insertUniq 1, insertUniq 2]
+      pure (ok (T.intercalate "," (map (T.pack . show . D1.changes) rs)))
+    ["d1", "batch-atomic"] -> do
+      db <- D1.d1 env "DB"
+      exec db "CREATE TABLE IF NOT EXISTS uniq (x INTEGER UNIQUE)" []
+      exec db "DELETE FROM uniq" []
+      outcome <- try (D1.batch db [insertUniq 1, insertUniq 1]) :: IO (Either D1.D1Exception [D1.D1RunResult])
+      count <- D1.query db (D1.Statement "SELECT COUNT(*) FROM uniq" [])
+      let n = case D1.rows count of
+            [[v]] -> renderD1 v
+            other -> T.pack (show other)
+      pure (ok ("batch=" <> either (const "failed") (const "succeeded") outcome <> " count=" <> n))
+    ["d1", "syntax"] -> do
+      db <- D1.d1 env "DB"
+      _ <- D1.query db (D1.Statement "SELEC 1" [])
+      pure (ok "unreachable")
+    ["d1", "missing"] -> do
+      _ <- D1.d1 env "NOPE"
+      pure (ok "unreachable")
     _ -> pure (F.response 404 [] (F.bodyText "not found"))
 
 ok :: Text -> F.Response
@@ -158,3 +212,17 @@ fromHex s
       | c >= '0' && c <= '9' = Just (ord c - ord '0')
       | c >= 'a' && c <= 'f' = Just (ord c - ord 'a' + 10)
       | otherwise = Nothing
+
+exec :: D1.D1Database -> Text -> [D1.D1Value] -> IO ()
+exec db q ps = void (D1.execute db (D1.Statement q ps))
+
+insertUniq :: Int64 -> D1.Statement
+insertUniq x = D1.Statement "INSERT INTO uniq (x) VALUES (?)" [D1.D1Integer x]
+
+renderD1 :: D1.D1Value -> Text
+renderD1 = \case
+  D1.D1Null -> "null"
+  D1.D1Integer n -> "int:" <> T.pack (show n)
+  D1.D1Real x -> "real:" <> T.pack (show x)
+  D1.D1Text t -> "text:" <> t
+  D1.D1Blob b -> "blob:" <> toHex b

@@ -4,6 +4,8 @@
 // starts test/yesod-wrangler.toml (test-yesod) and checks sessions and CSRF, and
 // test/vendor-wrangler.toml (test-vendor) and checks the vendored crypto stack and
 // http-client's Manager over fetch (GET, form POST, redirects, gzip, failures).
+// test-worker also gets the local D1 of test/wrangler.toml (binding DB), against
+// which the D1 checks run: Node has no D1, so they exist only here.
 //
 //   node scripts/check-wrangler.mjs
 //   SHOW_WRANGLER_LOG=1 node scripts/check-wrangler.mjs   # print the log even on success
@@ -283,6 +285,47 @@ const managerChecks = [
   }],
 ];
 
+// --- D1 against the local database of test/wrangler.toml (workerd only:
+// Node has no D1) ----------------------------------------------------------
+
+async function viaD1(path) {
+  const res = await send(path);
+  return { status: res.status, text: await res.text() };
+}
+
+const d1Checks = [
+  ["d1 values round-trip", async (p) => {
+    const r = await viaD1("/d1/roundtrip");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", r.text,
+      "i,j,r,s,b,n\nint:9007199254740991 int:-9007199254740991 real:1.5 text:héllo blob:00ff10 null");
+  }],
+  ["d1 rejects integers beyond 2^53", async (p) => {
+    const r = await viaD1("/d1/too-big");
+    expectEqual(p, "status", r.status, 500);
+    if (!r.text.includes("outside the range")) p.push(r.text);
+  }],
+  ["d1 execute reports changes and the row id", async (p) => {
+    expectEqual(p, "body", (await viaD1("/d1/run")).text, "changes=1 lastRowId>0=True");
+  }],
+  ["d1 batch runs every statement", async (p) => {
+    expectEqual(p, "body", (await viaD1("/d1/batch")).text, "1,1");
+  }],
+  ["d1 batch is atomic", async (p) => {
+    expectEqual(p, "body", (await viaD1("/d1/batch-atomic")).text, "batch=failed count=int:0");
+  }],
+  ["d1 errors are D1Exception", async (p) => {
+    const r = await viaD1("/d1/syntax");
+    expectEqual(p, "status", r.status, 500);
+    if (!/d1: .*syntax error/s.test(r.text)) p.push(r.text);
+  }],
+  ["d1 on a missing binding", async (p) => {
+    const r = await viaD1("/d1/missing");
+    expectEqual(p, "status", r.status, 500);
+    if (!r.text.includes("env: NOPE is not set")) p.push(r.text);
+  }],
+];
+
 // --- run --------------------------------------------------------------------
 
 let failures = 0;
@@ -327,6 +370,15 @@ try {
     report(name, problems);
   }
   for (const [name, run] of managerChecks) {
+    const problems = [];
+    try {
+      await run(problems);
+    } catch (e) {
+      problems.push(`threw ${e?.stack ?? e}`);
+    }
+    report(name, problems);
+  }
+  for (const [name, run] of d1Checks) {
     const problems = [];
     try {
       await run(problems);
