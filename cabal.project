@@ -9,6 +9,7 @@
 --   entropy        real: backed by the host's crypto.getRandomValues.
 packages:
   haskell/cloudflare-workers
+  haskell/http-client-cloudflare
   haskell/yesod-cloudflare
   haskell/wai-handler-cloudflare
   haskell/demo-wai

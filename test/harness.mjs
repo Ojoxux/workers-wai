@@ -34,6 +34,7 @@ export function fakeCtx() {
 /**
  * A local HTTP server for outbound fetch tests.
  *   /echo        -> 200 JSON { method, xtest, body }, header x-upstream: yes
+ *   /echo-all    -> 200 JSON { method, url, headers, body }
  *   /status/:n   -> status n, empty body
  *   /beacon      -> 204
  *   /hold        -> does not respond until the returned `release()` is called,
@@ -50,6 +51,11 @@ export function startUpstream() {
     const body = Buffer.concat(chunks).toString("utf8");
     hits.push({ method: req.method, url: req.url, body });
 
+    if (req.url === "/echo-all") {
+      res.writeHead(200, { "content-type": "application/json", "x-upstream": "yes" });
+      res.end(JSON.stringify({ method: req.method, url: req.url, headers: req.headers, body }));
+      return;
+    }
     if (req.url === "/echo") {
       res.writeHead(200, { "content-type": "application/json", "x-upstream": "yes" });
       res.end(JSON.stringify({ method: req.method, xtest: req.headers["x-test"] ?? null, body }));

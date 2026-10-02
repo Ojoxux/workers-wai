@@ -15,6 +15,7 @@ import qualified Codec.CBOR.Decoding            as D
 import qualified Codec.CBOR.Encoding            as E
 import           Codec.CBOR.Read                (deserialiseFromBytes)
 import           Codec.CBOR.Write               (toStrictByteString)
+import           Control.Exception              (try)
 import           Crypto.Cipher.AES              (AES128)
 import           Crypto.Cipher.Types            (cipherInit, ecbEncrypt)
 import           Crypto.Error                   (throwCryptoError)
@@ -28,12 +29,20 @@ import qualified Data.ByteArray.Encoding        as BAE
 import qualified Data.ByteString                as B
 import qualified Data.ByteString.Char8          as BC
 import qualified Data.ByteString.Lazy           as BL
+import qualified Data.CaseInsensitive           as CI
+import           Data.IORef                     (atomicModifyIORef', newIORef)
 import           Data.Int                       (Int64)
+import           Data.Maybe                     (fromMaybe)
 import           Data.Text                      (Text)
 import qualified Data.Text                      as T
 import qualified Data.Text.Encoding             as TE
 import           Data.Word                      (Word64)
-import           Network.HTTP.Client            (Manager, defaultManagerSettings, newManager)
+import           Network.HTTP.Client            (HttpException (..), Manager, RequestBody (..),
+                                                 applyBasicAuth, httpLbs, method, parseRequest,
+                                                 redirectCount, requestBody, requestHeaders,
+                                                 responseBody, responseHeaders, responseStatus)
+import           Network.HTTP.Client.Cloudflare (newFetchManager)
+import           Network.HTTP.Types             (statusCode)
 import           Network.Wai.Handler.Cloudflare (runCloudflare)
 import qualified Web.ClientSession              as CS
 import           Yesod.Auth
@@ -42,16 +51,15 @@ import           Yesod.Core
 import           Yesod.Form.I18n.English        (englishFormMessage)
 import           Yesod.Form.Types               (FormMessage)
 
--- | The HTTP manager is never used here: these checks only boot the auth
--- subsite. `defaultManagerSettings` has no TLS, so a real GitHub token
--- exchange would fail even with networking; making the OAuth flow work on
--- Workers needs an http-client Manager over fetch, which is not built yet.
+-- | The Manager sends requests through fetch (http-client-cloudflare). The auth
+-- subsite only boots here; /http exercises the Manager directly.
 newtype App = App Manager
 
 mkYesod "App" [parseRoutes|
 /vectors VectorsR GET
 /random  RandomR  GET
 /clientsession ClientSessionR GET
+/http HttpR GET
 /auth AuthR Auth getAuth
 |]
 
@@ -253,6 +261,52 @@ getClientSessionR = liftIO $ do
       then "ok"
       else T.pack (show (CS.decrypt key sealed, CS.decrypt key tampered))
 
+-- | Runs one http-client request through the fetch-backed Manager and
+-- summarises it as: status line, selected headers, blank line, body. An
+-- http-client exception becomes "exception <constructor> <details>".
+--
+-- Query: url (required), method, body, mode=chunked, contentType, accept,
+-- basic=user:pass, redirects (redirect count), expect=1.
+getHttpR :: Handler Text
+getHttpR = do
+  App manager <- getYesod
+  params <- reqGetParams <$> getRequest
+  let param k = lookup k params
+      bodyBytes = TE.encodeUtf8 (fromMaybe "" (param "body"))
+      chunks = BC.split ',' bodyBytes
+  initial <- liftIO (parseRequest (T.unpack (fromMaybe "" (param "url"))))
+  streamBody <- liftIO $ do
+    ref <- newIORef (zipWith (\i c -> if i == (0 :: Int) then c else "," <> c) [0 ..] chunks)
+    let pop = atomicModifyIORef' ref (\xs -> case xs of [] -> ([], ""); (y : ys) -> (ys, y))
+    pure (RequestBodyStreamChunked (\k -> k pop))
+  let headerFor name key = maybe [] (\v -> [(CI.mk name, TE.encodeUtf8 v)]) (param key)
+      withBody = case param "mode" of
+        Just "chunked" -> streamBody
+        _ -> RequestBodyBS bodyBytes
+      req =
+        maybe id (\creds -> let (u, p) = T.breakOn ":" creds in applyBasicAuth (TE.encodeUtf8 u) (TE.encodeUtf8 (T.drop 1 p))) (param "basic") $
+          initial
+            { method = TE.encodeUtf8 (fromMaybe "GET" (param "method"))
+            , requestBody = withBody
+            , requestHeaders =
+                headerFor "Content-Type" "contentType"
+                  <> headerFor "Accept" "accept"
+                  <> maybe [] (const [("Expect", "100-continue")]) (param "expect")
+            , redirectCount = maybe 10 (read . T.unpack) (param "redirects")
+            }
+  result <- liftIO (try (httpLbs req manager))
+  pure $ case result of
+    Left (HttpExceptionRequest _ content) -> "exception " <> T.pack (show content)
+    Left other -> "exception " <> T.pack (show other)
+    Right res ->
+      T.intercalate "\n" $
+        T.pack (show (statusCode (responseStatus res)))
+          : [ TE.decodeLatin1 (CI.foldedCase k) <> ": " <> TE.decodeLatin1 v
+            | (k, v) <- responseHeaders res
+            , CI.foldedCase k `elem` ["content-type", "content-encoding", "set-cookie", "location", "x-upstream"]
+            ]
+          <> ["", TE.decodeUtf8 (BL.toStrict (responseBody res))]
+
 getRandomR :: Handler Text
 getRandomR = liftIO (TE.decodeUtf8 . hex <$> (getRandomBytes 32 :: IO B.ByteString))
 
@@ -266,5 +320,5 @@ foreign export javascript "workerMain" main :: IO ()
 
 main :: IO ()
 main = do
-  manager <- newManager defaultManagerSettings
+  manager <- newFetchManager
   toWaiAppPlain (App manager) >>= runCloudflare
