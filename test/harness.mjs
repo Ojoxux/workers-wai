@@ -81,7 +81,7 @@ export function startUpstream() {
     }
     if (req.url === "/broken-body") {
       res.writeHead(200, { "content-type": "text/plain", "content-length": "100" });
-      res.write("abc", () => res.socket.destroy());
+      res.write("abc", () => setTimeout(() => res.socket.destroy(), 50));
       return;
     }
     if (req.url === "/not-modified") {
