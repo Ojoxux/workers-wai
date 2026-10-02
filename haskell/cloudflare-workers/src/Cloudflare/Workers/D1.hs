@@ -21,9 +21,9 @@
 --
 -- * JavaScript numbers do not distinguish integers from reals, so a REAL
 --   column holding @1.0@ comes back as @D1Integer 1@. A whole-number value of
---   2^53 or more in any column, a REAL one included (say @1e20@), cannot be
---   told apart from an out-of-range integer, so 'query' throws 'D1Exception'
---   for it. Read such columns with @CAST(col AS TEXT)@.
+--   magnitude 2^53 or more (negative ones too) in any column, a REAL one
+--   included (say @1e20@), cannot be told apart from an out-of-range
+--   integer, so 'query' throws 'D1Exception' for it. Read such columns with @CAST(col AS TEXT)@.
 --
 -- * 'D1Real' NaN and ±Infinity are rejected with 'D1Exception': D1 would
 --   store them as NULL.
@@ -151,11 +151,13 @@ batch (D1Database db) stmts = do
   n <- js_length results
   forM [0 .. n - 1] (js_index results >=> runResult)
 
--- | @[changes, rowId, safe]@ from 'js_execute' and 'js_batch'; @safe@ is
+-- | Reads a result's meta (from 'js_execute' and 'js_batch') as
+-- @[changes, rowId, safe]@ via 'js_runFields'; @safe@ is
 -- false when the row id is outside ±(2^53 − 1). Never throws: the statement
 -- has already run.
 runResult :: JSVal -> IO D1RunResult
-runResult r = do
+runResult meta = do
+  r <- js_runFields meta
   c <- js_indexNumber r 0
   rowId <- js_indexNumber r 1
   safe <- js_indexBool r 2
@@ -281,17 +283,17 @@ foreign import javascript safe
   js_query :: JSVal -> JSString -> JSVal -> IO JSVal
 
 foreign import javascript safe
-  "const runResult = (m) => { const id = m?.last_row_id ?? 0; \
-  \  const safe = typeof id === 'bigint' ? id >= -9007199254740991n && id <= 9007199254740991n : Number.isSafeInteger(id); \
-  \  return [Number(m?.changes ?? 0), Number(id), safe]; }; \
-  \const r = await $1.prepare($2).bind(...$3).run(); \
-  \return runResult(r.meta);"
+  "const r = await $1.prepare($2).bind(...$3).run(); \
+  \return r.meta;"
   js_execute :: JSVal -> JSString -> JSVal -> IO JSVal
 
 foreign import javascript safe
-  "const runResult = (m) => { const id = m?.last_row_id ?? 0; \
-  \  const safe = typeof id === 'bigint' ? id >= -9007199254740991n && id <= 9007199254740991n : Number.isSafeInteger(id); \
-  \  return [Number(m?.changes ?? 0), Number(id), safe]; }; \
-  \const rs = await $1.batch($2.map(([q, ps]) => $1.prepare(q).bind(...ps))); \
-  \return rs.map((r) => runResult(r.meta));"
+  "const rs = await $1.batch($2.map(([q, ps]) => $1.prepare(q).bind(...ps))); \
+  \return rs.map((r) => r.meta);"
   js_batch :: JSVal -> JSVal -> IO JSVal
+
+foreign import javascript unsafe
+  "(() => { try { const id = $1?.last_row_id ?? 0; \
+  \  const safe = typeof id === 'bigint' ? id >= -9007199254740991n && id <= 9007199254740991n : Number.isSafeInteger(id); \
+  \  return [Number($1?.changes ?? 0), Number(id), safe]; } catch (_) { return [0, 0, false]; } })()"
+  js_runFields :: JSVal -> IO JSVal
