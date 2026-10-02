@@ -20,11 +20,14 @@
 -- fetch, so Content-Encoding is removed before http-client sees it.
 --
 -- A fetch that yields no usable response (no response at all, or a body that
--- fails part-way through reading) surfaces as
--- @HttpExceptionRequest _ (ConnectionFailure _)@. A request the bridge
--- cannot send (malformed, too large, or using @Expect: 100-continue@)
--- surfaces as @HttpExceptionRequest _ (InternalException _)@ with the
--- reason in the message.
+-- fails part-way through reading, whose message then says "while reading the
+-- response body") surfaces as @HttpExceptionRequest _ (ConnectionFailure _)@.
+-- So does a request fetch refuses before sending (an invalid header value,
+-- for one), which cannot be told apart from a network failure. A request the
+-- bridge cannot send (malformed, too large, using @Expect: 100-continue@, or
+-- a GET or HEAD with a body) surfaces as
+-- @HttpExceptionRequest _ (InternalException _)@ with the reason in the
+-- message.
 --
 -- Proxies are not supported. Environment proxy variables are ignored, and a
 -- proxy set explicitly with 'managerSetProxy' is refused with
@@ -37,8 +40,8 @@ module Network.HTTP.Client.Cloudflare
 
 import qualified Cloudflare.Workers.Fetch             as F
 import           Control.Exception                    (Handler (..), IOException,
-                                                       catches, displayException,
-                                                       throwIO, toException)
+                                                       catch, catches, throwIO,
+                                                       toException)
 import qualified Data.ByteString                      as B
 import qualified Data.ByteString.Builder              as BB
 import qualified Data.ByteString.Char8                as BC
@@ -46,7 +49,6 @@ import qualified Data.ByteString.Lazy                 as BL
 import qualified Data.CaseInsensitive                 as CI
 import           Data.IORef                           (modifyIORef', newIORef,
                                                        readIORef, writeIORef)
-import qualified Data.Text                            as T
 import qualified Data.Text.Encoding                   as TE
 import           Network.HTTP.Client                  (HttpException (..),
                                                        HttpExceptionContent (..),
@@ -98,24 +100,24 @@ fetchConnection scheme host port = do
             writeIORef answered True
             raw <- BL.toStrict . BB.toLazyByteString <$> readIORef written
             wire <- either (\why -> ioError (userError ("http-client-cloudflare: " <> why))) pure (parseRequest raw)
+            -- fetch refuses these too, but its TypeError would look like a
+            -- network failure; this request can never succeed.
+            if wrMethod wire `elem` ["GET", "HEAD"] && not (B.null (wrBody wire))
+              then ioError (userError "http-client-cloudflare: fetch does not allow a body on GET or HEAD")
+              else pure ()
             let req = toFetchRequest scheme host port wire
-            -- fetch reports a missing response as FetchException; a body that
-            -- fails part-way (or a request fetch refuses before sending) comes
-            -- out as JSError or BodyAlreadyUsed. All of them mean no usable
-            -- response, so they are reported the same way.
-            (res, body) <-
-              ( do
-                  res <- F.fetch req
-                  body <- F.bytes (F.responseBody res)
-                  pure (res, body)
-              )
-                `catches` [ Handler (\(e :: F.JSError) -> throwIO (F.FetchException (F.url req) e))
-                          , Handler (\(e :: F.BodyAlreadyUsed) -> throwIO (F.FetchException (F.url req) (asJSError e)))
-                          ]
+                asFetchException e = throwIO (F.FetchException (F.url req) e)
+            -- fetch reports a missing response as FetchException, and a
+            -- request it refuses before sending as JSError. A body that fails
+            -- part-way is a JSError too, marked so it can be told apart. All
+            -- of them mean no usable response, so they are reported the same
+            -- way.
+            res <- F.fetch req `catch` asFetchException
+            body <-
+              F.bytes (F.responseBody res)
+                `catch` \e -> asFetchException e {F.jsErrorMessage = "while reading the response body: " <> F.jsErrorMessage e}
             pure (renderResponse (wrMethod wire) (F.status res) (F.statusText res) (F.responseHeaders res) body)
   makeConnection readConn write (pure ())
-  where
-    asJSError e = F.JSError {F.jsErrorName = "BodyAlreadyUsed", F.jsErrorMessage = T.pack (displayException e), F.jsErrorStack = ""}
 
 toFetchRequest :: B.ByteString -> String -> Int -> WireRequest -> F.Request
 toFetchRequest scheme host port wire =

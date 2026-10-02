@@ -270,7 +270,7 @@ getClientSessionR = liftIO $ do
 --
 -- Query: url (required), method, body, mode=chunked, contentType, accept,
 -- basic=user:pass, redirects (redirect count), expect (Expect header value), rawPath,
--- proxy=1.
+-- proxy=1, bearer (Authorization: Bearer <v>), ua (User-Agent).
 getHttpR :: Handler Text
 getHttpR = do
   App defaultManager <- getYesod
@@ -301,6 +301,8 @@ getHttpR = do
                 headerFor "Content-Type" "contentType"
                   <> headerFor "Accept" "accept"
                   <> headerFor "Expect" "expect"
+                  <> maybe [] (\v -> [("Authorization", "Bearer " <> TE.encodeUtf8 v)]) (param "bearer")
+                  <> headerFor "User-Agent" "ua"
             , redirectCount = fromMaybe 10 (readMaybe . T.unpack =<< param "redirects")
             }
       -- rawPath: set the path verbatim, bypassing parseRequest's escaping.

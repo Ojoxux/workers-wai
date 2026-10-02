@@ -139,7 +139,12 @@ async function httpText(params) {
 }
 
 test("a failure while reading the response body is an HttpException ConnectionFailure", async () => {
-  assert.match(await httpText({ url: `${upstream.url}/broken-body` }), /^exception ConnectionFailure/);
+  assert.match(await httpText({ url: `${upstream.url}/broken-body` }), /^exception ConnectionFailure.*while reading the response body/s);
+});
+
+test("a GET with a body is an InternalException, not a ConnectionFailure", async () => {
+  const text = await httpText({ url: `${upstream.url}/echo-all`, method: "GET", body: "x" });
+  assert.match(text, /^exception InternalException.*GET or HEAD/s);
 });
 
 test("# and \\ in a raw path are percent-encoded, not taken as fragment or separator", async () => {
@@ -172,4 +177,11 @@ test("a 304 response keeps the upstream Content-Length and has an empty body", a
   assert.equal(r.status, "304");
   assert.ok(r.headers.includes("content-length: 5"), r.headers.join("\n"));
   assert.equal(r.body, "");
+});
+
+test("a Bearer Authorization and a User-Agent reach the upstream (the shape of GitHub's user API request)", async () => {
+  const r = await http({ url: `${upstream.url}/echo-all`, bearer: "tok123", ua: "workers-wai-test" });
+  const seen = JSON.parse(r.body).headers;
+  assert.equal(seen.authorization, "Bearer tok123");
+  assert.equal(seen["user-agent"], "workers-wai-test");
 });

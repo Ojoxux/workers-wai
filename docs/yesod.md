@@ -165,10 +165,48 @@ cheaper than debugging.
 
 `yesod-auth` and `yesod-auth-oauth2` build and boot; `test-vendor` serves a
 minimal app with the GitHub plugin and checks that `/auth/login` returns 200.
-The OAuth login flow itself does not work yet: the token exchange and the user
-info request need an HTTP client that reaches the network, and `http-client`
-has none on Workers. The planned fix is an `http-client` `Manager` built on
-`fetch`.
+The OAuth flow needs an HTTP client for the token exchange and the user info
+request, and the stock `http-client` managers cannot connect on Workers. Use the
+`Manager` from `newFetchManager` (package `http-client-cloudflare`, see
+[http-client.md](http-client.md)). yesod-auth's default `authHttpManager` is the
+global manager from `http-client-tls`, which does not work here, so either
+override `authHttpManager`:
+
+```haskell
+import Network.HTTP.Client.Cloudflare (newFetchManager)
+
+main = runCloudflareWith $ \env -> do
+  manager <- newFetchManager
+  clientId <- Env.var env "GITHUB_CLIENT_ID"
+  clientSecret <- Env.var env "GITHUB_CLIENT_SECRET"
+  toWaiAppPlain (App manager clientId clientSecret)
+
+instance YesodAuth App where
+  authHttpManager = getsYesod appHttpManager
+  authPlugins app = [oauth2GitHub (appClientId app) (appClientSecret app)]
+```
+
+or call `Network.HTTP.Client.TLS.setGlobalManager =<< newFetchManager` once at
+startup, so everything that uses the global manager goes through fetch.
+
+### Checking GitHub login by hand
+
+Not automated, because it needs real GitHub credentials. `<target>` below is
+your own app: wired as in the snippet above and added as an executable to
+`cabal.project`. No target in this repo reads `GITHUB_CLIENT_ID` or
+`GITHUB_CLIENT_SECRET`.
+
+1. Register a GitHub OAuth App. For local dev the callback URL is
+   `http://localhost:8787/auth/page/github/callback`.
+2. Create `worker/.dev.vars` with `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
+   and `SESSION_KEY`, one `NAME=value` per line. wrangler hands them to the
+   Worker, where `Env.var` reads them as above. `.dev.vars` is in
+   `.gitignore`; never commit it.
+3. Build the app with `scripts/build.sh <target>`, which writes
+   `worker/generated/`.
+4. Run `cd worker && npm run dev`.
+5. Open `/auth/login`, follow the GitHub link, approve, and confirm the app
+   shows you logged in.
 
 ## What works
 
