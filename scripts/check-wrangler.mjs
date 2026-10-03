@@ -1,7 +1,8 @@
 // Run test-worker under `wrangler dev` (workerd) and check it over HTTP:
 // the shared table in test/cases.mjs, plus workerd-only checks that need an
 // upstream server (outbound fetch, Set-Cookie passthrough, waitUntil). It also
-// starts test/yesod-wrangler.toml (test-yesod) and checks sessions and CSRF, and
+// starts test/yesod-wrangler.toml (test-yesod) and checks sessions, CSRF and
+// persistent on its own local D1, and
 // test/vendor-wrangler.toml (test-vendor) and checks the vendored crypto stack and
 // http-client's Manager over fetch (GET, form POST, redirects, gzip, failures).
 // test-worker also gets the local D1 of test/wrangler.toml (binding DB), against
@@ -217,6 +218,23 @@ const sessionChecks = [
   }],
 ];
 
+// --- persistent on D1 (test-yesod's local DB; workerd only) ---------------
+
+const persistChecks = [
+  ["persistent migration creates the table", async (p) => {
+    const before = await (await sendYesod("/persist/migration")).text();
+    if (!/CREATE TABLE/i.test(before) && before !== "") p.push(`unexpected migration: ${before}`);
+    const setup = await sendYesod("/persist/setup");
+    expectEqual(p, "setup status", setup.status, 200);
+    expectEqual(p, "migration after setup", await (await sendYesod("/persist/migration")).text(), "");
+  }],
+  ["persistent CRUD", async (p) => {
+    const r = await sendYesod("/persist/crud");
+    expectEqual(p, "status", r.status, 200);
+    expectEqual(p, "body", await r.text(), "get=one top=three updated=10 count=2");
+  }],
+];
+
 // --- vendored crypto stack against test-vendor (Node covers the same in
 // test/vendor.test.mjs) ----------------------------------------------------
 
@@ -426,6 +444,15 @@ try {
     report(name, problems);
   }
   for (const [name, run] of sessionChecks) {
+    const problems = [];
+    try {
+      await run(problems);
+    } catch (e) {
+      problems.push(`threw ${e?.stack ?? e}`);
+    }
+    report(name, problems);
+  }
+  for (const [name, run] of persistChecks) {
     const problems = [];
     try {
       await run(problems);

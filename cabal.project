@@ -10,6 +10,7 @@
 packages:
   haskell/cloudflare-workers
   haskell/http-client-cloudflare
+  haskell/persistent-d1
   haskell/yesod-cloudflare
   haskell/wai-handler-cloudflare
   haskell/demo-wai
@@ -24,6 +25,7 @@ packages:
   haskell/vendor/cborg-0.2.10.0
   haskell/vendor/crypton-1.0.6
   haskell/vendor/xml-conduit-1.10.1.0
+  haskell/vendor/persistent-sqlite-2.13.3.1
 
 -- warp's `x509` flag only enables reading TLS client certificates. Cloudflare
 -- terminates TLS upstream, so the crypton-x509 dependency it pulls in is

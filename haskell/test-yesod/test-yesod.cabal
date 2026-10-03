@@ -11,7 +11,10 @@ executable test-yesod
     , base
     , bytestring
     , cloudflare-workers
+    , persistent
+    , persistent-d1
     , text
+    , time
     , wai-handler-cloudflare
     , yesod-cloudflare
     , yesod-core
