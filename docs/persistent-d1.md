@@ -231,9 +231,14 @@ rebuild of the referenced table therefore:
   PRAGMA defer_foreign_keys = true;
   ```
 
-- deletes the referencing rows, when the reference is `OnDeleteCascade` (or
-  sets them to NULL with `OnDeleteSetNull`). The pragma does not stop this:
-  it defers checks, not actions. Write such a migration by hand.
+- deletes the referencing rows, when the reference is `OnDeleteCascade`, or
+  overwrites their reference with `OnDeleteSetNull` or `OnDeleteSetDefault`.
+  The pragma does not stop this: it defers checks, not actions.
+
+- fails even with the pragma, when the reference is `OnDeleteRestrict`:
+  SQLite enforces `RESTRICT` at once, deferred or not.
+
+Write these last two kinds of migration by hand.
 
 ## The vendored persistent-sqlite
 
