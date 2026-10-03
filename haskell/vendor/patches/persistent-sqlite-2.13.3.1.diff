@@ -1,7 +1,7 @@
 diff --color -ruN -x dist-newstyle pristine/persistent-sqlite-2.13.3.1/Database/Persist/Sqlite.hs persistent-sqlite-2.13.3.1/Database/Persist/Sqlite.hs
---- pristine/persistent-sqlite-2.13.3.1/Database/Persist/Sqlite.hs	2026-10-03 10:27:29.262060000 +0900
-+++ persistent-sqlite-2.13.3.1/Database/Persist/Sqlite.hs	2026-10-03 10:27:29.268126000 +0900
-@@ -57,6 +57,11 @@
+--- pristine/persistent-sqlite-2.13.3.1/Database/Persist/Sqlite.hs	2026-10-03 01:47:57.917223000 +0900
++++ persistent-sqlite-2.13.3.1/Database/Persist/Sqlite.hs	2026-10-03 01:48:21.712516708 +0900
+@@ -57,6 +57,13 @@
      , createRawSqlitePoolFromInfo_
      , withRawSqlitePoolInfo
      , withRawSqlitePoolInfo_
@@ -10,12 +10,14 @@ diff --color -ruN -x dist-newstyle pristine/persistent-sqlite-2.13.3.1/Database/
 +    , insertSql'
 +    , migrate'
 +    , escape
++    , putManySql
++    , repsertManySql
      ) where
  
  import Control.Concurrent (threadDelay)
 diff --color -ruN -x dist-newstyle pristine/persistent-sqlite-2.13.3.1/Database/Sqlite.hs persistent-sqlite-2.13.3.1/Database/Sqlite.hs
---- pristine/persistent-sqlite-2.13.3.1/Database/Sqlite.hs	2026-10-03 10:27:29.262524000 +0900
-+++ persistent-sqlite-2.13.3.1/Database/Sqlite.hs	2026-10-03 10:27:29.268445000 +0900
+--- pristine/persistent-sqlite-2.13.3.1/Database/Sqlite.hs	2026-10-03 01:47:57.917526000 +0900
++++ persistent-sqlite-2.13.3.1/Database/Sqlite.hs	2026-10-03 01:48:21.726975972 +0900
 @@ -66,6 +66,7 @@
                           bindNull,
                           bindText,
@@ -25,8 +27,8 @@ diff --color -ruN -x dist-newstyle pristine/persistent-sqlite-2.13.3.1/Database/
                           columns,
                           changes,
 diff --color -ruN -x dist-newstyle pristine/persistent-sqlite-2.13.3.1/persistent-sqlite.cabal persistent-sqlite-2.13.3.1/persistent-sqlite.cabal
---- pristine/persistent-sqlite-2.13.3.1/persistent-sqlite.cabal	2026-10-03 10:27:29.264579000 +0900
-+++ persistent-sqlite-2.13.3.1/persistent-sqlite.cabal	2026-10-03 10:27:29.270122000 +0900
+--- pristine/persistent-sqlite-2.13.3.1/persistent-sqlite.cabal	2026-10-03 01:47:57.919026000 +0900
++++ persistent-sqlite-2.13.3.1/persistent-sqlite.cabal	2026-10-03 09:26:17.505897814 +0900
 @@ -127,9 +127,12 @@
  
    c-sources:        cbits/config.c

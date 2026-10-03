@@ -62,6 +62,8 @@ module Database.Persist.Sqlite
     , insertSql'
     , migrate'
     , escape
+    , putManySql
+    , repsertManySql
     ) where
 
 import Control.Concurrent (threadDelay)

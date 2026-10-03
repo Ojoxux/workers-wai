@@ -1,5 +1,9 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 
 -- | persistent on Cloudflare D1.
 --
@@ -15,9 +19,11 @@
 --   on its own and an exception does not undo earlier writes. Use
 --   'Cloudflare.Workers.D1.batch' for writes that must be atomic.
 -- * __At most 100 parameters per statement__ (D1's limit). @insertMany_@ and
---   @insertEntityMany@ are split into chunks; @putMany@ and @repsertMany@ run
---   row by row. A single statement with more than 100 parameters (a @<-.@
---   filter or @getMany@ over many keys, say) fails.
+--   @insertEntityMany@ are split into chunks. @putMany@ and @repsertMany@
+--   (and so @repsert@) are one atomic statement for all rows, as in
+--   persistent-sqlite, and fail past the limit; use 'putManyChunked' and
+--   'repsertManyChunked' for many rows. Any other statement with more than
+--   100 parameters (a @<-.@ filter or @getMany@ over many keys, say) fails.
 -- * __Values.__ Binding converts values as persistent-sqlite does, but D1
 --   stores and returns them differently (see "Cloudflare.Workers.D1"):
 --   numbers are bound as REAL, so an @Int@ written to a TEXT column is stored
@@ -35,11 +41,13 @@ module Database.Persist.D1
   , runD1
   , createD1Pool
   , d1MigrationSql
+  , putManyChunked
+  , repsertManyChunked
   ) where
 
 import qualified Cloudflare.Workers.D1        as D1
 import           Control.Monad.IO.Class       (MonadIO, liftIO)
-import           Control.Monad.Trans.Reader   (runReaderT)
+import           Control.Monad.Trans.Reader   (ReaderT, runReaderT)
 import           Data.Acquire                 (Acquire)
 import           Data.Conduit                 (ConduitM, yield)
 import           Data.Fixed                   (Pico)
@@ -51,7 +59,8 @@ import qualified Data.Text.Encoding           as TE
 import qualified Data.Text.Encoding.Error     as TEE
 import           Database.Persist.Sql
 import           Database.Persist.SqlBackend
-import           Database.Persist.Sqlite      (escape, insertSql', migrate')
+import           Database.Persist.Sqlite      (escape, insertSql', migrate',
+                                               putManySql, repsertManySql)
 import           Database.Sqlite              (format8601)
 
 -- | A 'SqlBackend' for this database. Cheap: build one per request if
@@ -60,28 +69,34 @@ d1Backend :: D1.D1Database -> IO SqlBackend
 d1Backend db = do
   smap <- newIORef mempty
   pure $
-    -- No setConnPutManySql / setConnRepsertManySql: those build one statement
-    -- for all rows, which D1's parameter limit rejects; persistent's default
-    -- runs them row by row instead.
-    setConnMaxParams 100 $
-      mkSqlBackend
-        MkSqlBackendArgs
-          { connPrepare = prepareD1 db
-          , connStmtMap = smap
-          , connInsertSql = insertReturning
-          , connClose = pure ()
-          , connMigrateSql = migrate'
-          , connBegin = \_ _ -> pure ()
-          , connCommit = \_ -> pure ()
-          , connRollback = \_ -> pure ()
-          , connEscapeFieldName = escape . unFieldNameDB
-          , connEscapeTableName = escape . unEntityNameDB . getEntityDBName
-          , connEscapeRawName = escape
-          , connNoLimit = "LIMIT -1"
-          , connRDBMS = "sqlite"
-          , connLimitOffset = decorateSQLWithLimitOffset "LIMIT -1"
-          , connLogFunc = \_ _ _ _ -> pure ()
-          }
+    setConnMaxParams maxParams $
+      -- One statement for all rows, so concurrent requests cannot interleave
+      -- between a lookup and a write. Past the parameter limit, see
+      -- putManyChunked and repsertManyChunked.
+      setConnPutManySql putManySql $
+        setConnRepsertManySql repsertManySql $
+          mkSqlBackend
+            MkSqlBackendArgs
+              { connPrepare = prepareD1 db
+              , connStmtMap = smap
+              , connInsertSql = insertReturning
+              , connClose = pure ()
+              , connMigrateSql = migrate'
+              , connBegin = \_ _ -> pure ()
+              , connCommit = \_ -> pure ()
+              , connRollback = \_ -> pure ()
+              , connEscapeFieldName = escape . unFieldNameDB
+              , connEscapeTableName = escape . unEntityNameDB . getEntityDBName
+              , connEscapeRawName = escape
+              , connNoLimit = "LIMIT -1"
+              , connRDBMS = "sqlite"
+              , connLimitOffset = decorateSQLWithLimitOffset "LIMIT -1"
+              , connLogFunc = \_ _ _ _ -> pure ()
+              }
+
+-- | D1's limit on bound parameters per statement.
+maxParams :: Int
+maxParams = 100
 
 -- | persistent-sqlite fetches the new id with a second statement that reads
 -- @last_insert_rowid()@. On Workers, requests interleave within an isolate,
@@ -104,6 +119,32 @@ createD1Pool :: D1.D1Database -> IO (Pool SqlBackend)
 -- The pool's size and idle time are arbitrary: a pooled backend holds no
 -- connection, so neither limits anything.
 createD1Pool db = newPool (defaultPoolConfig (d1Backend db) (\_ -> pure ()) 60 10)
+
+-- | 'putMany' in chunks small enough for D1's parameter limit. Each chunk is
+-- one atomic statement; the chunks together are not atomic.
+putManyChunked
+  :: forall record m.
+     (MonadIO m, PersistEntity record, PersistEntityBackend record ~ SqlBackend, SafeToInsert record)
+  => [record] -> ReaderT SqlBackend m ()
+putManyChunked = mapM_ putMany . chunksOf (rowsPerStatement @record)
+
+-- | 'repsertMany' in chunks small enough for D1's parameter limit. Each chunk
+-- is one atomic statement; the chunks together are not atomic.
+repsertManyChunked
+  :: forall record m.
+     (MonadIO m, PersistEntity record, PersistEntityBackend record ~ SqlBackend)
+  => [(Key record, record)] -> ReaderT SqlBackend m ()
+repsertManyChunked = mapM_ repsertMany . chunksOf (rowsPerStatement @record)
+
+-- | Rows that fit in one statement. A repsertMany row binds the key and
+-- every field; a putMany row binds the fields only.
+rowsPerStatement :: forall record. PersistEntity record => Int
+rowsPerStatement =
+  max 1 (maxParams `div` length (keyAndEntityFields (entityDef ([] :: [record]))))
+
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf _ [] = []
+chunksOf n xs = let (a, b) = splitAt n xs in a : chunksOf n b
 
 -- | The statements persistent would run to migrate this database to the
 -- given definitions. Nothing is executed.
@@ -130,7 +171,8 @@ prepareD1 db sql =
 queryD1 :: (MonadIO m) => D1.D1Database -> Text -> [PersistValue] -> Acquire (ConduitM () [PersistValue] m ())
 -- The statement runs when the query is acquired, not when the rows are
 -- pulled: persistent's insert_ acquires an INSERT … RETURNING and never
--- reads it.
+-- reads it. Acquiring runs with asynchronous exceptions masked; the wait for
+-- D1 is still interruptible.
 queryD1 db sql vals = do
   result <- liftIO (D1.query db (D1.Statement sql (map toD1 vals)))
   pure (mapM_ (yield . map fromD1) (D1.rows result))

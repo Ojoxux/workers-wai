@@ -247,8 +247,9 @@ const persistChecks = [
   ["persistent unique constraint", async (p) => {
     expectEqual(p, "body", await (await sendYesod("/persist/unique")).text(), "rejected stored=1");
   }],
-  ["persistent bulk insert past 100 parameters and putMany", async (p) => {
-    expectEqual(p, "body", await (await sendYesod("/persist/bulk")).text(), "count=40 counts=100,200");
+  ["persistent bulk writes past 100 parameters", async (p) => {
+    expectEqual(p, "body", await (await sendYesod("/persist/bulk")).text(),
+      "count=50 reps=15 counts=1,1100,5000 unchunked=rejected");
   }],
   ["persistent through createD1Pool and runSqlPool", async (p) => {
     expectEqual(p, "body", await (await sendYesod("/persist/pool")).text(), "pooled");

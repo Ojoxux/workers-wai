@@ -37,8 +37,10 @@ import qualified Data.Text                      as T
 import           Data.Time                      (Day, UTCTime (..), fromGregorian,
                                                  secondsToDiffTime)
 import           Database.Persist
-import           Database.Persist.D1            (createD1Pool, d1MigrationSql, runD1)
-import           Database.Persist.Sql           (runSqlPool)
+import           Database.Persist.D1            (createD1Pool, d1MigrationSql,
+                                                 putManyChunked, repsertManyChunked,
+                                                 runD1)
+import           Database.Persist.Sql           (runSqlPool, toSqlKey)
 import           Database.Persist.TH
 import           Network.Wai.Handler.Cloudflare (runCloudflareWith)
 import           Text.Read                      (readMaybe)
@@ -182,23 +184,42 @@ getPersistUniqueR = withDb $ \db -> do
       verdict e = if "UNIQUE" `T.isInfixOf` e then "rejected" else "failed: " <> T.take 80 e
   pure (outcome <> " stored=" <> T.pack (show n))
 
--- | insertMany_ and putMany, each over more parameters than one D1 statement
--- takes: insertMany_ is split into chunks, putMany runs row by row.
+-- | Bulk writes over more parameters than one D1 statement takes (8 per
+-- putMany row, 9 per repsertMany row): insertMany_ is split by persistent,
+-- putManyChunked and repsertManyChunked split themselves, and a plain putMany
+-- that is too big is rejected as a whole.
 getPersistBulkR :: Handler Text
-getPersistBulkR = withDb $ \db -> runD1 db $ do
-  deleteWhere [NoteTitle <-. map bulkTitle [1 .. 40]]
-  insertMany_ [sample (bulkTitle i) i | i <- [1 .. 40]]   -- 40 rows x 8 columns > 100 parameters
-  putMany [sample (bulkTitle i) (i * 100) | i <- [1 .. 20]] -- 20 rows x 8 columns, upserts on UniqueTitle
-  n <- count [NoteTitle <-. map bulkTitle [1 .. 40]]
-  firsts <- selectList [NoteTitle <-. [bulkTitle 1, bulkTitle 2]] [Asc NoteTitle]
-  pure ("count=" <> T.pack (show n) <> " counts=" <> T.intercalate "," (map (T.pack . show . noteCount . entityVal) firsts))
-  where bulkTitle i = "bulk-" <> T.pack (show (i :: Int))
+getPersistBulkR = withDb $ \db -> do
+  runD1 db $ do
+    deleteWhere [NoteTitle <-. titles]
+    deleteWhere [NoteId <-. repKeys]
+    insertMany_ [sample (bulkTitle i) i | i <- [1 .. 40]]
+    -- 30 existing rows updated, 10 new ones inserted
+    putManyChunked [sample (bulkTitle i) (i * 100) | i <- [11 .. 50]]
+    repsertManyChunked [(k, sample ("rep-" <> T.pack (show i)) i) | (i, k) <- zip [1 :: Int ..] repKeys]
+  unchunked <- try (runD1 db (putMany [sample (bulkTitle i) 0 | i <- [1 .. 20]]))
+  runD1 db $ do
+    n <- count [NoteTitle <-. titles]
+    reps <- count [NoteId <-. repKeys]
+    counts <- mapM (\i -> maybe (-1) (noteCount . entityVal) <$> getBy (UniqueTitle (bulkTitle i))) [1, 11, 50]
+    pure $ T.unwords
+      [ "count=" <> T.pack (show n)
+      , "reps=" <> T.pack (show reps)
+      , "counts=" <> T.intercalate "," (map (T.pack . show) counts)
+      , "unchunked=" <> either (\(_ :: SomeException) -> "rejected") (const "accepted") unchunked
+      ]
+  where
+    bulkTitle i = "bulk-" <> T.pack (show (i :: Int))
+    titles = map bulkTitle [1 .. 50]
+    repKeys = [toSqlKey (900000 + fromIntegral i) | i <- [1 .. 15 :: Int]]
 
 -- | insert and get through createD1Pool and runSqlPool.
 getPersistPoolR :: Handler Text
 getPersistPoolR = withDb $ \db -> do
   pool <- createD1Pool db
-  runSqlPool (maybe "missing" noteTitle <$> (insert (sample "pooled" 7) >>= get)) pool
+  flip runSqlPool pool $ do
+    deleteBy (UniqueTitle "pooled")
+    maybe "missing" noteTitle <$> (insert (sample "pooled" 7) >>= get)
 
 -- | Changing a table: persistent-sqlite rebuilds it through a backup copy,
 -- which must work on D1 and keep the rows.
