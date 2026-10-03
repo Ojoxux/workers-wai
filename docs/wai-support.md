@@ -73,7 +73,8 @@ environment unless `envAsEnviron: false` is passed to `makeWorker`, so
 | Trailers, HTTP/2 details, `Expect: 100-continue` | not represented |
 | `HEAD` | not special-cased; the runtime drops the body |
 | Yesod file uploads, gzip middleware | link, but rest on shimmed code paths; untested |
-| Persistent / PostgreSQL, D1 / KV / R2, Durable Objects, Cron / Queues | out of scope for this PoC |
+| Persistent on PostgreSQL or MySQL | not covered; would need Workers' TCP `connect()` (or Hyperdrive). Persistent on D1 is supported; see [persistent-d1.md](persistent-d1.md) and [d1.md](d1.md) |
+| KV / R2, Durable Objects, Cron / Queues | not covered yet |
 
 ## Where the limits come from
 

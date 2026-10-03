@@ -182,6 +182,25 @@ There is no `HSrts_thr` for wasm. Packages whose `Setup.hs` link-tests against i
 — `entropy` is the one encountered here — fail during `configure`, which is a
 confusing place to see a linker error.
 
+## Template Haskell cannot load C libraries like pthread
+
+GHC runs Template Haskell on wasm in an external interpreter (`dyld.mjs`),
+which loads the libraries of the module's dependencies. It
+cannot load a C archive: a package with `extra-libraries: pthread`, as stock
+persistent-sqlite has, makes the interpreter crash with
+
+```
+loadArchive: unsupported on wasm for .../libpthread.a
+```
+
+in any module that uses Template Haskell and depends on that package, such as
+one calling `mkPersist`. GHC does not then fail: it waits forever on the dead
+interpreter, so the build hangs with no further output.
+
+The vendored persistent-sqlite drops `pthread` on wasi and builds its SQLite
+with `SQLITE_THREADSAFE=0` (see `haskell/vendor/README.md`). Run long builds
+under a time limit (`timeout`, say), so a hang like this ends as a failure.
+
 ## Headers are treated as latin-1
 
 Bytes map one-to-one to characters across the FFI boundary, so non-ASCII header

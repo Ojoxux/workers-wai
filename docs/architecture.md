@@ -26,6 +26,7 @@ haskell/wai-handler-cloudflare runCloudflareWith :: (Env -> IO Application) -> I
         v
 haskell/demo-wai, demo-yesod   WAI / Yesod applications
 haskell/http-client-cloudflare   http-client Manager over fetch (newFetchManager)
+haskell/persistent-d1          persistent backend over Cloudflare.Workers.D1 (runD1, createD1Pool)
 haskell/test-worker            one route per cloudflare-workers behaviour
 haskell/test-vendor            checks the vendored crypto stack against published vectors
 haskell/vendor/*               Hackage packages patched to build for wasm

@@ -64,7 +64,12 @@ and runs 21 D1 checks against it (see [d1.md](d1.md)). D1 runs only under
 `wrangler dev`: Node has no D1, so these checks are not in `test/cases.mjs`.
 
 It also starts a second instance, `wrangler dev -c test/yesod-wrangler.toml`,
-and runs two session and CSRF checks against it. A third instance,
+and runs two session and CSRF checks against it, then 8 persistent checks
+against its own local D1 (binding `DB` in `test/yesod-wrangler.toml`):
+migration, CRUD, ids of concurrent inserts, field type round trips, a unique
+constraint, bulk writes past 100 parameters, `createD1Pool` with
+`runSqlPool`, and a migration that rebuilds a table (see
+[persistent-d1.md](persistent-d1.md)). A third instance,
 `wrangler dev -c test/vendor-wrangler.toml` (`test-vendor`), runs 10 checks: the
 vendored crypto and CBOR vectors, randomness through `random_get`, the real
 clientsession round trip, the yesod-auth login page, and 6 manager checks for the
