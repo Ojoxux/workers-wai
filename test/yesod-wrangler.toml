@@ -5,3 +5,9 @@ compatibility_date = "2026-09-01"
 # A fixed test key for local dev only; any value of at least 32 bytes works.
 [vars]
 SESSION_KEY = "test-session-key-current-0123456789abcdef"
+
+# Local D1 for the persistent checks in scripts/check-wrangler.mjs (placeholder id).
+[[d1_databases]]
+binding = "DB"
+database_name = "persistent-d1-test"
+database_id = "00000000-0000-0000-0000-000000000001"

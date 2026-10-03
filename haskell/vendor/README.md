@@ -12,6 +12,7 @@ changed. `cabal.project` lists them as local packages, which shadows Hackage.
 | cborg 0.2.10.0 | Its `ARCH_32bit` code had bit-rotted (type errors, a syntax error, `GHC.IntWord64`). Needed by `tls` through `serialise`. | Maintained: to be offered upstream. |
 | crypton 1.0.6 | argon2 built without threads; a WASI entropy backend using `getentropy` (the `random_get` import) — without it every random operation fails; curve25519/x448 FFI declared with the C return type. | Maintained: to be offered upstream. |
 | xml-conduit 1.10.1.0 | Its cabal-doctest `Setup.hs` links against the threaded RTS, which wasm has not; switched to `build-type: Simple`. Needed by `authenticate`, which `yesod-auth` uses. | Maintained: to be offered upstream. |
+| persistent-sqlite 2.13.3.1 | Exports its SQLite SQL generation (`insertSql'`, `migrate'`, `escape`, `putManySql`, `repsertManySql`) and `Database.Sqlite.format8601`, so `persistent-d1` can reuse the dialect; the Haskell changes only add exports. On wasi it no longer asks for `-lpthread`, which GHC's Template Haskell interpreter cannot load (any TH module depending on it failed), and builds its SQLite with `SQLITE_THREADSAFE=0`, as wasm has no threads. | Maintained: could be offered upstream as an `.Internal` module. |
 
 The 32-bit fixes run code paths that are rarely exercised; `haskell/test-vendor`
 checks them against published vectors. `/vectors` returns `ok 77` when all of
@@ -60,6 +61,7 @@ source-repository-package
           haskell/vendor/basement-0.0.16
           haskell/vendor/cborg-0.2.10.0
           haskell/vendor/xml-conduit-1.10.1.0
+          haskell/vendor/persistent-sqlite-2.13.3.1
 ```
 
 Use the same `constraints:` as this repository's `cabal.project`.
