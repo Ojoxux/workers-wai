@@ -171,8 +171,8 @@ prepareD1 db sql =
 queryD1 :: (MonadIO m) => D1.D1Database -> Text -> [PersistValue] -> Acquire (ConduitM () [PersistValue] m ())
 -- The statement runs when the query is acquired, not when the rows are
 -- pulled: persistent's insert_ acquires an INSERT … RETURNING and never
--- reads it. Acquiring runs with asynchronous exceptions masked; the wait for
--- D1 is still interruptible.
+-- reads it. Acquire's liftIO runs under restore, so the wait for D1 is not
+-- masked.
 queryD1 db sql vals = do
   result <- liftIO (D1.query db (D1.Statement sql (map toD1 vals)))
   pure (mapM_ (yield . map fromD1) (D1.rows result))
