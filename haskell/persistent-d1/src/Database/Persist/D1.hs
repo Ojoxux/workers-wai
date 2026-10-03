@@ -1,5 +1,9 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 
 -- | persistent on Cloudflare D1.
 --
@@ -14,8 +18,22 @@
 -- * __No transactions.__ D1 has no BEGIN\/COMMIT, so each statement commits
 --   on its own and an exception does not undo earlier writes. Use
 --   'Cloudflare.Workers.D1.batch' for writes that must be atomic.
--- * __At most 100 parameters per statement__ (D1's limit); persistent splits
---   bulk operations accordingly.
+-- * __At most 100 parameters per statement__ (D1's limit). @insertMany_@ and
+--   @insertEntityMany@ are split into chunks. @putMany@ and @repsertMany@
+--   (and so @repsert@) are one atomic statement for all rows, as in
+--   persistent-sqlite, and fail past the limit; use 'putManyChunked' and
+--   'repsertManyChunked' for many rows. Any other statement with more than
+--   100 parameters (a @<-.@ filter or @getMany@ over many keys, say) fails.
+-- * __Values.__ Binding converts values as persistent-sqlite does, but D1
+--   stores and returns them differently (see "Cloudflare.Workers.D1"):
+--   numbers are bound as REAL, so an @Int@ written to a TEXT column is stored
+--   as @\"5.0\"@; a whole-number REAL reads back as 'PersistInt64', which the
+--   built-in instances accept but a custom 'PersistField' expecting
+--   'PersistDouble' may not; integers and keys outside ±(2^53 − 1) throw
+--   'Cloudflare.Workers.D1.D1Exception'.
+-- * __Queries are not streamed.__ D1 returns all rows at once, and
+--   @selectSource@ yields them from memory.
+-- * __SQL is not logged__: @connLogFunc@ does nothing.
 -- * __Migrations are not run here.__ 'd1MigrationSql' returns the statements;
 --   apply them with @wrangler d1 migrations@.
 module Database.Persist.D1
@@ -23,11 +41,13 @@ module Database.Persist.D1
   , runD1
   , createD1Pool
   , d1MigrationSql
+  , putManyChunked
+  , repsertManyChunked
   ) where
 
 import qualified Cloudflare.Workers.D1        as D1
 import           Control.Monad.IO.Class       (MonadIO, liftIO)
-import           Control.Monad.Trans.Reader   (runReaderT)
+import           Control.Monad.Trans.Reader   (ReaderT, runReaderT)
 import           Data.Acquire                 (Acquire)
 import           Data.Conduit                 (ConduitM, yield)
 import           Data.Fixed                   (Pico)
@@ -49,14 +69,17 @@ d1Backend :: D1.D1Database -> IO SqlBackend
 d1Backend db = do
   smap <- newIORef mempty
   pure $
-    setConnMaxParams 100 $
+    setConnMaxParams maxParams $
+      -- One statement for all rows, so concurrent requests cannot interleave
+      -- between a lookup and a write. Past the parameter limit, see
+      -- putManyChunked and repsertManyChunked.
       setConnPutManySql putManySql $
         setConnRepsertManySql repsertManySql $
           mkSqlBackend
             MkSqlBackendArgs
               { connPrepare = prepareD1 db
               , connStmtMap = smap
-              , connInsertSql = insertSql'
+              , connInsertSql = insertReturning
               , connClose = pure ()
               , connMigrateSql = migrate'
               , connBegin = \_ _ -> pure ()
@@ -71,6 +94,21 @@ d1Backend db = do
               , connLogFunc = \_ _ _ _ -> pure ()
               }
 
+-- | D1's limit on bound parameters per statement.
+maxParams :: Int
+maxParams = 100
+
+-- | persistent-sqlite fetches the new id with a second statement that reads
+-- @last_insert_rowid()@. On Workers, requests interleave within an isolate,
+-- so that can return another request's id; RETURNING gets it in the same
+-- statement.
+insertReturning :: EntityDef -> [PersistValue] -> InsertSqlResult
+insertReturning ent vals =
+  case (insertSql' ent vals, getEntityId ent) of
+    (ISRInsertGet ins _, EntityIdField fd) ->
+      ISRSingle (ins <> " RETURNING " <> escape (unFieldNameDB (fieldDB fd)))
+    (other, _) -> other
+
 -- | Run persistent actions against this database.
 runD1 :: D1.D1Database -> SqlPersistT IO a -> IO a
 runD1 db action = d1Backend db >>= runReaderT action
@@ -78,12 +116,47 @@ runD1 db action = d1Backend db >>= runReaderT action
 -- | A pool for 'runSqlPool' (and Yesod's runDB). Backends are cheap and hold
 -- no connection; the pool exists so code written for a pool works unchanged.
 createD1Pool :: D1.D1Database -> IO (Pool SqlBackend)
+-- The pool's size and idle time are arbitrary: a pooled backend holds no
+-- connection, so neither limits anything.
 createD1Pool db = newPool (defaultPoolConfig (d1Backend db) (\_ -> pure ()) 60 10)
+
+-- | 'putMany' in chunks small enough for D1's parameter limit. Each chunk is
+-- one atomic statement; the chunks together are not atomic.
+putManyChunked
+  :: forall record m.
+     (MonadIO m, PersistEntity record, PersistEntityBackend record ~ SqlBackend, SafeToInsert record)
+  => [record] -> ReaderT SqlBackend m ()
+putManyChunked = mapM_ putMany . chunksOf (rowsPerStatement @record)
+
+-- | 'repsertMany' in chunks small enough for D1's parameter limit. Each chunk
+-- is one atomic statement; the chunks together are not atomic.
+repsertManyChunked
+  :: forall record m.
+     (MonadIO m, PersistEntity record, PersistEntityBackend record ~ SqlBackend)
+  => [(Key record, record)] -> ReaderT SqlBackend m ()
+repsertManyChunked = mapM_ repsertMany . chunksOf (rowsPerStatement @record)
+
+-- | Rows that fit in one statement. A repsertMany row binds the key and
+-- every field; a putMany row binds the fields only.
+rowsPerStatement :: forall record. PersistEntity record => Int
+rowsPerStatement =
+  max 1 (maxParams `div` length (keyAndEntityFields (entityDef ([] :: [record]))))
+
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf _ [] = []
+chunksOf n xs = let (a, b) = splitAt n xs in a : chunksOf n b
 
 -- | The statements persistent would run to migrate this database to the
 -- given definitions. Nothing is executed.
+--
+-- To change a table, persistent-sqlite copies it into a backup table, drops
+-- and recreates it, and copies the rows back. It makes the backup a TEMP
+-- table, which D1 refuses (@not authorized@), so here the backup is an
+-- ordinary table; the migration drops it at the end.
 d1MigrationSql :: D1.D1Database -> Migration -> IO [Text]
-d1MigrationSql db migration = runD1 db (getMigration migration)
+d1MigrationSql db migration = map noTemp <$> runD1 db (getMigration migration)
+  where
+    noTemp s = maybe s ("CREATE TABLE " <>) (T.stripPrefix "CREATE TEMP TABLE " s)
 
 prepareD1 :: D1.D1Database -> Text -> IO Statement
 prepareD1 db sql =
@@ -96,12 +169,16 @@ prepareD1 db sql =
       }
 
 queryD1 :: (MonadIO m) => D1.D1Database -> Text -> [PersistValue] -> Acquire (ConduitM () [PersistValue] m ())
-queryD1 db sql vals =
-  pure $ do
-    result <- liftIO (D1.query db (D1.Statement sql (map toD1 vals)))
-    mapM_ (yield . map fromD1) (D1.rows result)
+-- The statement runs when the query is acquired, not when the rows are
+-- pulled: persistent's insert_ acquires an INSERT … RETURNING and never
+-- reads it. Acquire's liftIO runs under restore, so the wait for D1 is not
+-- masked.
+queryD1 db sql vals = do
+  result <- liftIO (D1.query db (D1.Statement sql (map toD1 vals)))
+  pure (mapM_ (yield . map fromD1) (D1.rows result))
 
--- | The same conversion persistent-sqlite's Database.Sqlite.bind applies.
+-- | Converts as persistent-sqlite's Database.Sqlite.bind does. The stored
+-- values can still differ, since D1 binds every number as a REAL.
 toD1 :: PersistValue -> D1.D1Value
 toD1 = \case
   PersistInt64 n -> D1.D1Integer n
