@@ -15,7 +15,8 @@
 {-# LANGUAGE ViewPatterns #-}
 
 -- | A Yesod app that exercises Yesod.Cloudflare.Session, one route per
--- behaviour, and persistent on D1 under /persist. Driven by
+-- behaviour, persistent on D1 under /persist, and yesod-static routes served
+-- by Workers Static Assets (public/, see test/yesod-wrangler.toml). Driven by
 -- test/session.test.mjs and scripts/check-wrangler.mjs; not an example to copy.
 --
 -- SESSION_BACKEND=clientsession switches to yesod-core's
@@ -45,7 +46,9 @@ import           Database.Persist.TH
 import           Network.Wai.Handler.Cloudflare (runCloudflareWith)
 import           Text.Read                      (readMaybe)
 import           Yesod.Cloudflare.Session
+import           Yesod.Cloudflare.Static        (assetsStatic)
 import           Yesod.Core
+import           Yesod.Static                   (Static, staticFiles)
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 Note
@@ -73,9 +76,18 @@ ProbeV2 sql=probe
   size Int default=0
 |]
 
-data App = App {appSessionBackend :: SessionBackend, appDb :: Maybe D1.D1Database}
+-- Typed routes for public/static (app_js, img_dot_png), as in any Yesod app.
+staticFiles "public/static"
+
+data App = App
+  { appSessionBackend :: SessionBackend
+  , appDb             :: Maybe D1.D1Database
+  , appStatic         :: Static
+  }
 
 mkYesod "App" [parseRoutes|
+/static     StaticR    Static appStatic
+/static-url StaticUrlR GET
 /count CountR GET
 /large LargeR GET
 /form  FormR  GET POST
@@ -113,6 +125,12 @@ getFormR = fromMaybe "" . reqToken <$> getRequest
 
 postFormR :: Handler Text
 postFormR = pure "ok"
+
+-- | The URLs yesod-static renders for two files, one per line.
+getStaticUrlR :: Handler Text
+getStaticUrlR = do
+  render <- getUrlRender
+  pure (T.unlines [render (StaticR app_js), render (StaticR img_dot_png)])
 
 withDb :: (D1.D1Database -> IO Text) -> Handler Text
 withDb k = getYesod >>= maybe (pure "no DB binding") (liftIO . k) . appDb
@@ -252,7 +270,7 @@ main = runCloudflareWith $ \env -> do
       minutes <- maybe 120 (read . T.unpack) <$> Env.lookupVar env "SESSION_MINUTES"
       cloudflareSessionBackend (SessionKeys current (maybeToList old)) minutes
   db <- either (const Nothing) Just <$> tryJust missing (D1.d1 env "DB")
-  toWaiAppPlain (App backend db)
+  toWaiAppPlain (App backend db assetsStatic)
   where
     -- Only a missing binding is tolerated; a DB bound to something else
     -- still fails.

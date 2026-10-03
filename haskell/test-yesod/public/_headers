@@ -1,0 +1,4 @@
+# Hashed /static URLs (yesod-static adds ?etag=<hash>) never change content,
+# so browsers may keep them for a year.
+/static/*
+  Cache-Control: public, max-age=31536000, immutable

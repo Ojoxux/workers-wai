@@ -5,7 +5,8 @@ synopsis:        Yesod integrations for Cloudflare Workers
 description:
   Pieces that let a Yesod application run on Cloudflare Workers through
   wai-handler-cloudflare. Currently: a session backend on WebCrypto
-  AES-256-GCM with key rotation.
+  AES-256-GCM with key rotation, and a static subsite for serving
+  yesod-static routes from Workers Static Assets.
 
 license:         BSD-3-Clause
 build-type:      Simple
@@ -15,6 +16,7 @@ library
   exposed-modules:
     Yesod.Cloudflare.Session
     Yesod.Cloudflare.Session.Codec
+    Yesod.Cloudflare.Static
   build-depends:
     , base               >=4.17 && <5
     , base64-bytestring
@@ -25,7 +27,9 @@ library
     , text
     , time
     , wai
+    , wai-app-static
     , yesod-core
+    , yesod-static
 
   default-language: Haskell2010
   ghc-options:      -Wall
