@@ -46,9 +46,9 @@ import           Database.Persist.TH
 import           Network.Wai.Handler.Cloudflare (runCloudflareWith)
 import           Text.Read                      (readMaybe)
 import           Yesod.Cloudflare.Session
-import           Yesod.Cloudflare.Static        (assetsStatic)
+import           Yesod.Cloudflare.Static        (assetsStatic, staticFilesTracked)
 import           Yesod.Core
-import           Yesod.Static                   (Static, staticFiles)
+import           Yesod.Static                   (Static)
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 Note
@@ -77,7 +77,7 @@ ProbeV2 sql=probe
 |]
 
 -- Typed routes for public/static (app_js, img_dot_png), as in any Yesod app.
-staticFiles "public/static"
+staticFilesTracked "public/static"
 
 data App = App
   { appSessionBackend :: SessionBackend

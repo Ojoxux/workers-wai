@@ -242,9 +242,15 @@ const staticChecks = [
     }
   }],
   ["a missing static file reaches the Worker and gets a 404", async (p) => {
-    const r = await sendYesod("/static/missing.js?etag=x");
-    expectEqual(p, "status", r.status, 404);
-    await r.text();
+    // "File not found" is assetsStatic's answer, so the Worker handled it.
+    for (const path of ["/static/missing.js?etag=x", "/static"]) {
+      const r = await sendYesod(path);
+      expectEqual(p, `${path} status`, r.status, 404);
+      expectEqual(p, `${path} body`, await r.text(), "File not found");
+    }
+    const headers = await sendYesod("/_headers");
+    expectEqual(p, "/_headers status (never served as an asset)", headers.status, 404);
+    await headers.text();
   }],
 ];
 

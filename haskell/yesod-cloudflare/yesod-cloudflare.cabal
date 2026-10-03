@@ -6,7 +6,8 @@ description:
   Pieces that let a Yesod application run on Cloudflare Workers through
   wai-handler-cloudflare. Currently: a session backend on WebCrypto
   AES-256-GCM with key rotation, and a static subsite for serving
-  yesod-static routes from Workers Static Assets.
+  yesod-static routes from Workers Static Assets (which pulls in
+  yesod-static).
 
 license:         BSD-3-Clause
 build-type:      Simple
@@ -24,6 +25,9 @@ library
     , cloudflare-workers
     , containers
     , cookie
+    , directory
+    , filepath
+    , template-haskell
     , text
     , time
     , wai
