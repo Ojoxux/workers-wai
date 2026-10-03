@@ -208,6 +208,14 @@ your own app: wired as in the snippet above and added as an executable to
 5. Open `/auth/login`, follow the GitHub link, approve, and confirm the app
    shows you logged in.
 
+## persistent and `runDB`
+
+`haskell/persistent-d1` runs persistent against D1. `createD1Pool` gives the
+`Pool SqlBackend` that a `YesodPersist` instance passes to `runSqlPool`. See
+[persistent-d1.md](persistent-d1.md) for the instance, and for what differs
+from a SQLite connection: no transactions, so `runDB` does not roll back, and
+migrations applied with wrangler rather than at startup.
+
 ## What works
 
 Routing, type-safe URLs, Hamlet templates, `defaultLayout`, and Yesod's own 404
