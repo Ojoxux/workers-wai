@@ -219,13 +219,21 @@ back and drops the backup. persistent-sqlite makes the backup a `TEMP`
 table, which D1 refuses (`not authorized`), so `d1MigrationSql` emits an
 ordinary `CREATE TABLE` for it instead.
 
-D1 always enforces foreign keys, so dropping a table that other tables
-reference can fail or cascade. For such migrations D1 recommends starting the
-file with:
+D1 always enforces foreign keys, and `DROP TABLE` first deletes every row of
+the table. If other tables reference it (a `userId UserId` field, say), a
+rebuild of the referenced table therefore:
 
-```sql
-PRAGMA defer_foreign_keys = true;
-```
+- fails, when the reference has no `ON DELETE` action (persistent's
+  default). Start the migration file with the pragma below, which defers the
+  check to the end of the migration, when the rows are back:
+
+  ```sql
+  PRAGMA defer_foreign_keys = true;
+  ```
+
+- deletes the referencing rows, when the reference is `OnDeleteCascade` (or
+  sets them to NULL with `OnDeleteSetNull`). The pragma does not stop this:
+  it defers checks, not actions. Write such a migration by hand.
 
 ## The vendored persistent-sqlite
 
