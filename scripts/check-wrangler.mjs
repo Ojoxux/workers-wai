@@ -236,6 +236,23 @@ const persistChecks = [
   ["persistent migration that rebuilds a table keeps its rows", async (p) => {
     expectEqual(p, "body", await (await sendYesod("/persist/rebuild")).text(), "steps=6 rows=kept:0 left=0");
   }],
+  ["persistent inserts under concurrency get their own ids", async (p) => {
+    const titles = Array.from({ length: 20 }, (_, i) => `conc-${Date.now()}-${i}`);
+    const bodies = await Promise.all(titles.map((t) => sendYesod(`/persist/insert/${t}`).then((r) => r.text())));
+    titles.forEach((t, i) => { if (bodies[i] !== t) p.push(`${t} read back as ${bodies[i]}`); });
+  }],
+  ["persistent field types round-trip", async (p) => {
+    expectEqual(p, "body", await (await sendYesod("/persist/types")).text(), "ok");
+  }],
+  ["persistent unique constraint", async (p) => {
+    expectEqual(p, "body", await (await sendYesod("/persist/unique")).text(), "rejected stored=1");
+  }],
+  ["persistent bulk insert past 100 parameters and putMany", async (p) => {
+    expectEqual(p, "body", await (await sendYesod("/persist/bulk")).text(), "count=40 counts=100,200");
+  }],
+  ["persistent through createD1Pool and runSqlPool", async (p) => {
+    expectEqual(p, "body", await (await sendYesod("/persist/pool")).text(), "pooled");
+  }],
 ];
 
 // --- vendored crypto stack against test-vendor (Node covers the same in

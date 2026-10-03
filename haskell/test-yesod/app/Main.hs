@@ -28,7 +28,7 @@ module Main (main) where
 
 import qualified Cloudflare.Workers.D1          as D1
 import qualified Cloudflare.Workers.Env         as Env
-import           Control.Exception              (SomeException, try)
+import           Control.Exception              (SomeException, try, tryJust)
 import           Data.ByteString                (ByteString)
 import qualified Data.ByteString                as B
 import           Data.Maybe                     (fromMaybe, maybeToList)
@@ -37,7 +37,8 @@ import qualified Data.Text                      as T
 import           Data.Time                      (Day, UTCTime (..), fromGregorian,
                                                  secondsToDiffTime)
 import           Database.Persist
-import           Database.Persist.D1            (d1MigrationSql, runD1)
+import           Database.Persist.D1            (createD1Pool, d1MigrationSql, runD1)
+import           Database.Persist.Sql           (runSqlPool)
 import           Database.Persist.TH
 import           Network.Wai.Handler.Cloudflare (runCloudflareWith)
 import           Text.Read                      (readMaybe)
@@ -80,6 +81,11 @@ mkYesod "App" [parseRoutes|
 /persist/setup     PersistSetupR     GET
 /persist/crud      PersistCrudR      GET
 /persist/rebuild   PersistRebuildR   GET
+/persist/insert/#Text PersistInsertR GET
+/persist/types        PersistTypesR  GET
+/persist/unique       PersistUniqueR GET
+/persist/bulk         PersistBulkR   GET
+/persist/pool         PersistPoolR   GET
 |]
 
 instance Yesod App where
@@ -144,6 +150,56 @@ getPersistCrudR = withDb $ \db -> runD1 db $ do
   where
     epoch = UTCTime (fromGregorian 2026 10 3) (secondsToDiffTime 3600)
 
+sample :: Text -> Int -> Note
+sample t c = Note t Nothing c 0.5 False (UTCTime (fromGregorian 2026 10 3) 0) (fromGregorian 2026 10 3) ""
+
+-- | Insert a note titled after the path, then read it back by the returned key.
+getPersistInsertR :: Text -> Handler Text
+getPersistInsertR t = withDb $ \db -> runD1 db $ do
+  k <- insert (sample t 1)
+  got <- get k
+  pure (maybe "missing" noteTitle got)
+
+-- | Every field type of Note survives a write and a read.
+getPersistTypesR :: Handler Text
+getPersistTypesR = withDb $ \db -> runD1 db $ do
+  let v = Note "types" (Just "body é😀") (-42) 2.0 True
+            (UTCTime (fromGregorian 2026 10 3) (secondsToDiffTime 45296 + 0.123456))
+            (fromGregorian 1999 12 31) (B.pack [0, 1, 254, 255])
+  deleteBy (UniqueTitle "types")
+  k <- insert v
+  got <- get k
+  pure (if got == Just v then "ok" else T.pack (show (got, v)))
+
+-- | A second note with the same title is rejected by UniqueTitle.
+getPersistUniqueR :: Handler Text
+getPersistUniqueR = withDb $ \db -> do
+  runD1 db (deleteBy (UniqueTitle "dup") >> insert_ (sample "dup" 1))
+  r <- try (runD1 db (insert_ (sample "dup" 2)))
+  -- stored=1 also shows that insert_ wrote the first note.
+  n <- runD1 db (count [NoteTitle ==. "dup"])
+  let outcome = either (\(e :: SomeException) -> verdict (T.pack (show e))) (const "accepted") r
+      verdict e = if "UNIQUE" `T.isInfixOf` e then "rejected" else "failed: " <> T.take 80 e
+  pure (outcome <> " stored=" <> T.pack (show n))
+
+-- | insertMany_ and putMany, each over more parameters than one D1 statement
+-- takes: insertMany_ is split into chunks, putMany runs row by row.
+getPersistBulkR :: Handler Text
+getPersistBulkR = withDb $ \db -> runD1 db $ do
+  deleteWhere [NoteTitle <-. map bulkTitle [1 .. 40]]
+  insertMany_ [sample (bulkTitle i) i | i <- [1 .. 40]]   -- 40 rows x 8 columns > 100 parameters
+  putMany [sample (bulkTitle i) (i * 100) | i <- [1 .. 20]] -- 20 rows x 8 columns, upserts on UniqueTitle
+  n <- count [NoteTitle <-. map bulkTitle [1 .. 40]]
+  firsts <- selectList [NoteTitle <-. [bulkTitle 1, bulkTitle 2]] [Asc NoteTitle]
+  pure ("count=" <> T.pack (show n) <> " counts=" <> T.intercalate "," (map (T.pack . show . noteCount . entityVal) firsts))
+  where bulkTitle i = "bulk-" <> T.pack (show (i :: Int))
+
+-- | insert and get through createD1Pool and runSqlPool.
+getPersistPoolR :: Handler Text
+getPersistPoolR = withDb $ \db -> do
+  pool <- createD1Pool db
+  runSqlPool (maybe "missing" noteTitle <$> (insert (sample "pooled" 7) >>= get)) pool
+
 -- | Changing a table: persistent-sqlite rebuilds it through a backup copy,
 -- which must work on D1 and keep the rows.
 getPersistRebuildR :: Handler Text
@@ -174,5 +230,10 @@ main = runCloudflareWith $ \env -> do
       old <- Env.lookupVar env "SESSION_KEY_OLD"
       minutes <- maybe 120 (read . T.unpack) <$> Env.lookupVar env "SESSION_MINUTES"
       cloudflareSessionBackend (SessionKeys current (maybeToList old)) minutes
-  db <- either (\(_ :: SomeException) -> Nothing) Just <$> try (D1.d1 env "DB")
+  db <- either (const Nothing) Just <$> tryJust missing (D1.d1 env "DB")
   toWaiAppPlain (App backend db)
+  where
+    -- Only a missing binding is tolerated; a DB bound to something else
+    -- still fails.
+    missing (Env.EnvMissing _) = Just ()
+    missing _                  = Nothing
