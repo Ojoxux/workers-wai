@@ -212,9 +212,14 @@ Read every generated file before applying it. `d1MigrationSql` returns all of
 persistent's statements, including the ones `runMigration` would refuse as
 unsafe, such as dropping a column.
 
-To change a column, persistent-sqlite rebuilds the table: it copies the rows
-into a temporary table, drops the original, recreates it and copies them
-back. D1 always enforces foreign keys, so dropping a table that other tables
+Whenever a table's definition changes (a column added, removed or retyped),
+persistent-sqlite rebuilds the table: it copies the rows into a backup
+table `<table>_backup`, drops the original, recreates it, copies the rows
+back and drops the backup. persistent-sqlite makes the backup a `TEMP`
+table, which D1 refuses (`not authorized`), so `d1MigrationSql` emits an
+ordinary `CREATE TABLE` for it instead.
+
+D1 always enforces foreign keys, so dropping a table that other tables
 reference can fail or cascade. For such migrations D1 recommends starting the
 file with:
 
@@ -254,7 +259,8 @@ local D1 (binding `DB` in `test/yesod-wrangler.toml`) and calls its
 - bulk writes past 100 parameters (`insertMany_`, `putManyChunked`,
   `repsertManyChunked`), and an unchunked `putMany` that is too big is
   rejected;
-- `createD1Pool` with `runSqlPool`.
+- `createD1Pool` with `runSqlPool`;
+- a migration that adds a column rebuilds the table and keeps its rows.
 
 `test-yesod` applies the migration with `D1.execute`, which is fine for tests;
 apps should use `wrangler d1 migrations`.
