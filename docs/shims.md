@@ -54,7 +54,8 @@ A shim fakes an API: the package keeps its name and version, but the code is
 written from scratch and may do less than the original. A vendored package is
 the real code with a small patch, so it behaves like the original wherever the
 patch does not reach. Packages that only needed a patch to build live in
-`haskell/vendor/` (`basement`, `memory`, `cborg`, `crypton`, `xml-conduit`);
+`haskell/vendor/` (`basement`, `memory`, `cborg`, `crypton`, `xml-conduit`,
+`persistent-sqlite`);
 `haskell/vendor/README.md` says what each patch changes and why.
 
 `memory` and `clientsession` moved from the first group to the second. The
