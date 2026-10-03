@@ -65,7 +65,7 @@ environment unless `envAsEnviron: false` is passed to `makeWorker`, so
 
 | Feature | Behaviour |
 |---|---|
-| `responseFile` | `501`, with an explanatory body — there is no filesystem |
+| `responseFile` | `501`, with an explanatory body — there is no filesystem. Serve static files with Workers Static Assets; for yesod-static see [yesod.md](yesod.md#static-files) |
 | `responseRaw` | `501` — requires hijacking the connection |
 | WebSocket | not attempted; would need Workers' `WebSocketPair` instead of WAI |
 | True streaming | `responseStream` buffers, so no server-sent events and no progressive download |
