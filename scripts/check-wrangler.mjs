@@ -233,6 +233,9 @@ const persistChecks = [
     expectEqual(p, "status", r.status, 200);
     expectEqual(p, "body", await r.text(), "get=one top=three updated=10 count=2");
   }],
+  ["persistent migration that rebuilds a table keeps its rows", async (p) => {
+    expectEqual(p, "body", await (await sendYesod("/persist/rebuild")).text(), "steps=6 rows=kept:0 left=0");
+  }],
 ];
 
 // --- vendored crypto stack against test-vendor (Node covers the same in

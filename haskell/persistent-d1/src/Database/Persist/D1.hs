@@ -82,8 +82,15 @@ createD1Pool db = newPool (defaultPoolConfig (d1Backend db) (\_ -> pure ()) 60 1
 
 -- | The statements persistent would run to migrate this database to the
 -- given definitions. Nothing is executed.
+--
+-- To change a table, persistent-sqlite copies it into a backup table, drops
+-- and recreates it, and copies the rows back. It makes the backup a TEMP
+-- table, which D1 refuses (@not authorized@), so here the backup is an
+-- ordinary table; the migration drops it at the end.
 d1MigrationSql :: D1.D1Database -> Migration -> IO [Text]
-d1MigrationSql db migration = runD1 db (getMigration migration)
+d1MigrationSql db migration = map noTemp <$> runD1 db (getMigration migration)
+  where
+    noTemp s = maybe s ("CREATE TABLE " <>) (T.stripPrefix "CREATE TEMP TABLE " s)
 
 prepareD1 :: D1.D1Database -> Text -> IO Statement
 prepareD1 db sql =

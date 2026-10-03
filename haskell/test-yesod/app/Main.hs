@@ -58,6 +58,18 @@ Note
   deriving Show Eq
 |]
 
+-- Two versions of one table, for a migration that changes it.
+share [mkPersist sqlSettings, mkMigrate "migrateProbeV1"] [persistLowerCase|
+ProbeV1 sql=probe
+  name Text
+|]
+
+share [mkPersist sqlSettings, mkMigrate "migrateProbeV2"] [persistLowerCase|
+ProbeV2 sql=probe
+  name Text
+  size Int default=0
+|]
+
 data App = App {appSessionBackend :: SessionBackend, appDb :: Maybe D1.D1Database}
 
 mkYesod "App" [parseRoutes|
@@ -67,6 +79,7 @@ mkYesod "App" [parseRoutes|
 /persist/migration PersistMigrationR GET
 /persist/setup     PersistSetupR     GET
 /persist/crud      PersistCrudR      GET
+/persist/rebuild   PersistRebuildR   GET
 |]
 
 instance Yesod App where
@@ -130,6 +143,24 @@ getPersistCrudR = withDb $ \db -> runD1 db $ do
     ]
   where
     epoch = UTCTime (fromGregorian 2026 10 3) (secondsToDiffTime 3600)
+
+-- | Changing a table: persistent-sqlite rebuilds it through a backup copy,
+-- which must work on D1 and keep the rows.
+getPersistRebuildR :: Handler Text
+getPersistRebuildR = withDb $ \db -> do
+  let run = mapM_ (\s -> D1.execute db (D1.Statement s []))
+  run ["DROP TABLE IF EXISTS probe", "DROP TABLE IF EXISTS probe_backup"]
+  run =<< d1MigrationSql db migrateProbeV1
+  _ <- runD1 db (insert (ProbeV1 "kept"))
+  steps <- d1MigrationSql db migrateProbeV2
+  run steps
+  rows <- runD1 db (selectList ([] :: [Filter ProbeV2]) [])
+  left <- d1MigrationSql db migrateProbeV2
+  pure $ T.unwords
+    [ "steps=" <> T.pack (show (length steps))
+    , "rows=" <> T.intercalate "," [probeV2Name r <> ":" <> T.pack (show (probeV2Size r)) | Entity _ r <- rows]
+    , "left=" <> T.pack (show (length left))
+    ]
 
 foreign export javascript "workerMain" main :: IO ()
 
