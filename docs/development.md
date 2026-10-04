@@ -64,9 +64,10 @@ and runs 21 D1 checks against it (see [d1.md](d1.md)). D1 runs only under
 `wrangler dev`: Node has no D1, so these checks are not in `test/cases.mjs`.
 
 It also starts a second instance, `wrangler dev -c test/yesod-wrangler.toml`,
-and runs two session and CSRF checks against it, two checks that its
-yesod-static URLs are served by Workers Static Assets (`[assets]` in
-`test/yesod-wrangler.toml`, see [yesod.md](yesod.md#static-files)), then 8 persistent checks
+and runs two session and CSRF checks against it, two static file checks
+(yesod-static URLs are served by Workers Static Assets, and a missing file
+reaches the Worker's 404; `[assets]` in `test/yesod-wrangler.toml`, see
+[yesod.md](yesod.md#static-files)), then 8 persistent checks
 against its own local D1 (binding `DB` in `test/yesod-wrangler.toml`):
 migration, CRUD, ids of concurrent inserts, field type round trips, a unique
 constraint, bulk writes past 100 parameters, `createD1Pool` with

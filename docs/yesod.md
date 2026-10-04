@@ -268,7 +268,9 @@ main = runCloudflareWith $ \env -> toWaiAppPlain App { appStatic = assetsStatic,
 Both functions come from `yesod-cloudflare`:
 
 - `assetsStatic` holds no files. Only requests for files that do not exist
-  reach the Worker, and it answers every one with 404.
+  reach the Worker, and it answers GET and HEAD with 404 (wai-app-static
+  still sends 405 for other methods and 403 for path segments starting
+  with a dot).
 - `staticFilesTracked` is `staticFiles` plus a dependency on each file it
   hashes. `staticFiles` alone puts each file's hash into its URL at compile
   time without telling GHC about the file, so an edited file keeps its old
