@@ -216,6 +216,90 @@ your own app: wired as in the snippet above and added as an executable to
 from a SQLite connection: no transactions, so `runDB` does not roll back, and
 migrations applied with wrangler rather than at startup.
 
+## Static files
+
+A Worker has no filesystem, so yesod-static's `static` and `staticDevel`,
+which read the directory when called, cannot be used. Serve the files with
+[Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/)
+instead. When a request's path matches a file in the assets directory, the
+file is returned without running the Worker, and the query string is
+ignored. So the URLs yesod-static generates, such as
+`/static/app.js?etag=…`, are served as they are, as long as the files sit
+under `static/` inside the assets directory.
+
+```
+public/
+  _headers
+  static/
+    app.js
+    img/logo.png
+```
+
+```toml
+# wrangler.toml
+[assets]
+directory = "public"
+```
+
+```cabal
+-- the .cabal file: so cabal rebuilds when a static file changes
+extra-source-files:
+  public/static/**/*.js
+  public/static/**/*.png
+```
+
+```haskell
+import Yesod.Cloudflare.Static (assetsStatic, staticFilesTracked)
+import Yesod.Static (Static)
+
+staticFilesTracked "public/static"   -- app_js, img_logo_png, as with staticFiles
+
+data App = App { appStatic :: Static, ... }
+
+mkYesod "App" [parseRoutes|
+/static StaticR Static appStatic
+...
+|]
+
+main :: IO ()
+main = runCloudflareWith $ \env -> toWaiAppPlain App { appStatic = assetsStatic, ... }
+```
+
+Both functions come from `yesod-cloudflare`:
+
+- `assetsStatic` holds no files. Only requests for files that do not exist
+  reach the Worker, and it answers GET and HEAD with 404 (wai-app-static
+  still sends 405 for other methods and 403 for path segments starting
+  with a dot).
+- `staticFilesTracked` is `staticFiles` plus a dependency on each file it
+  hashes. `staticFiles` alone puts each file's hash into its URL at compile
+  time without telling GHC about the file, so an edited file keeps its old
+  `?etag=` until the module happens to be recompiled. GHC only sees the
+  dependency if cabal runs it, hence `extra-source-files`, one pattern per
+  extension (with `cabal-version: 3.0`, `**` must be followed by `*.ext`).
+
+Keep Yesod's default `addStaticContent`, which inlines the CSS and
+JavaScript that widgets generate. The scaffold's `addStaticContentExternal`
+writes them to `static/tmp`, which a Worker cannot do.
+
+The assets layer sends `Cache-Control: public, max-age=0, must-revalidate`
+and an `ETag` by default, so browsers revalidate every time. The URLs change
+whenever a file's content does, so they can be cached for good with a
+`_headers` file in the assets directory:
+
+```
+/static/*
+  Cache-Control: public, max-age=31536000, immutable
+```
+
+That applies to every URL under `/static/`, including ones without the
+`etag` query, so link to static files only through `StaticR` and the
+generated names, never with a literal `/static/...` path. Requests for
+static assets are free and do not count as Worker requests. `test-yesod`
+serves `haskell/test-yesod/public` this way, and
+`scripts/check-wrangler.mjs` checks the bodies, `Content-Type`,
+`Cache-Control` and the Worker's 404.
+
 ## What works
 
 Routing, type-safe URLs, Hamlet templates, `defaultLayout`, and Yesod's own 404
