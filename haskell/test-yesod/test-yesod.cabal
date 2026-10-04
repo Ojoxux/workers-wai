@@ -4,6 +4,12 @@ version:         0.1.0.0
 synopsis:        Yesod app driven by test/session.test.mjs
 build-type:      Simple
 
+-- So cabal rebuilds when a static file changes (staticFilesTracked then
+-- recompiles the module that hashes them).
+extra-source-files:
+  public/static/**/*.js
+  public/static/**/*.png
+
 executable test-yesod
   main-is:          Main.hs
   hs-source-dirs:   app
@@ -18,6 +24,7 @@ executable test-yesod
     , wai-handler-cloudflare
     , yesod-cloudflare
     , yesod-core
+    , yesod-static
 
   default-language: Haskell2010
   ghc-options:

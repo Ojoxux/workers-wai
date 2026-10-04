@@ -1,7 +1,8 @@
 // Run test-worker under `wrangler dev` (workerd) and check it over HTTP:
 // the shared table in test/cases.mjs, plus workerd-only checks that need an
 // upstream server (outbound fetch, Set-Cookie passthrough, waitUntil). It also
-// starts test/yesod-wrangler.toml (test-yesod) and checks sessions, CSRF and
+// starts test/yesod-wrangler.toml (test-yesod) and checks sessions, CSRF,
+// yesod-static routes served by Workers Static Assets, and
 // persistent on its own local D1, and
 // test/vendor-wrangler.toml (test-vendor) and checks the vendored crypto stack and
 // http-client's Manager over fetch (GET, form POST, redirects, gzip, failures).
@@ -215,6 +216,41 @@ const sessionChecks = [
     expectEqual(problems, "status without token", rejected.status, 403);
     const accepted = await sendYesod("/form", { method: "POST", headers: { cookie, "X-XSRF-TOKEN": token } });
     expectEqual(problems, "status with token", accepted.status, 200);
+  }],
+];
+
+// --- yesod-static routes served by Workers Static Assets (workerd only) ----
+
+const staticChecks = [
+  ["yesod-static URLs are served by Workers Static Assets", async (p) => {
+    const urls = (await (await sendYesod("/static-url")).text()).trim().split("\n");
+    const expected = [
+      ["/static/app.js", "text/javascript", "window.testYesodStatic"],
+      ["/static/img/dot.png", "image/png", null],
+    ];
+    expectEqual(p, "url count", urls.length, expected.length);
+    for (const [i, [path, type, prefix]] of expected.entries()) {
+      const url = new URL(urls[i] ?? "", yesod.base);
+      expectEqual(p, `path ${i}`, url.pathname, path);
+      if (!/^\?etag=[\w-]+/.test(url.search)) p.push(`${path}: no etag query in ${urls[i]}`);
+      const r = await sendYesod(url.pathname + url.search);
+      expectEqual(p, `${path} status`, r.status, 200);
+      if (!(r.headers.get("content-type") ?? "").startsWith(type)) p.push(`${path}: content-type ${r.headers.get("content-type")}`);
+      expectEqual(p, `${path} cache-control`, r.headers.get("cache-control"), "public, max-age=31536000, immutable");
+      const body = await r.text();
+      if (prefix && !body.startsWith(prefix)) p.push(`${path}: body ${body.slice(0, 60)}`);
+    }
+  }],
+  ["a missing static file reaches the Worker and gets a 404", async (p) => {
+    // "File not found" is assetsStatic's answer, so the Worker handled it.
+    for (const path of ["/static/missing.js?etag=x", "/static"]) {
+      const r = await sendYesod(path);
+      expectEqual(p, `${path} status`, r.status, 404);
+      expectEqual(p, `${path} body`, await r.text(), "File not found");
+    }
+    const headers = await sendYesod("/_headers");
+    expectEqual(p, "/_headers status (never served as an asset)", headers.status, 404);
+    await headers.text();
   }],
 ];
 
@@ -465,6 +501,15 @@ try {
     report(name, problems);
   }
   for (const [name, run] of sessionChecks) {
+    const problems = [];
+    try {
+      await run(problems);
+    } catch (e) {
+      problems.push(`threw ${e?.stack ?? e}`);
+    }
+    report(name, problems);
+  }
+  for (const [name, run] of staticChecks) {
     const problems = [];
     try {
       await run(problems);
